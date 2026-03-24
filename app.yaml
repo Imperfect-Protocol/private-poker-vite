@@ -1,0 +1,4 @@
+name: app-sadhbh-c0d3-2603241
+owner: sadhbh-c0d3
+package: .
+kind: wasmer.io/App.v0
