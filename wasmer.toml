@@ -1,6 +1,6 @@
 [package]
 name = "sadhbh-c0d3/private-poker"
-version = "0.1.3"
+version = "0.1.5"
 description = "Private Poker"
 
 [dependencies]
