@@ -1,6 +1,6 @@
 import { usePublicClient, useWriteContract, useWatchContractEvent } from 'wagmi';
 import { decodeAbiParameters, parseAbi } from 'viem';
-import { LOBBY_CONTRACT_ADDRESS } from '@/lib/chain';
+import { LOBBY_CONTRACT_ADDRESS, CHAIN_POLLING_INTERVAL } from '@/lib/chain';
 
 const LOBBY_ABI = parseAbi([
     // Reads
@@ -266,7 +266,7 @@ export function useListenForNewLobbies(onLobbyCreated) {
         address: LOBBY_CONTRACT_ADDRESS,
         abi: LOBBY_ABI,
         eventName: 'LobbyCreated',
-        pollingInterval: 4000,
+        pollingInterval: CHAIN_POLLING_INTERVAL,
         onLogs: (logs) => {
             logs.forEach(log => {
                 onLobbyCreated(log.args);
@@ -280,7 +280,7 @@ export function useListenForNewTables(onTableCreated) {
         address: LOBBY_CONTRACT_ADDRESS,
         abi: LOBBY_ABI,
         eventName: 'TableCreated',
-        pollingInterval: 4000,
+        pollingInterval: CHAIN_POLLING_INTERVAL,
         onLogs: (logs) => {
             logs.forEach(log => {
                 onTableCreated(log.args);

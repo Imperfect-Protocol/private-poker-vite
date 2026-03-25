@@ -1,6 +1,6 @@
 import { useWriteContract, useWatchContractEvent } from 'wagmi';
 import { parseAbi } from 'viem';
-import { SIGNAL_CONTRACT_ADDRESS } from '@/lib/chain';
+import { SIGNAL_CONTRACT_ADDRESS, CHAIN_POLLING_INTERVAL } from '@/lib/chain';
 
 const SIGNAL_ABI = parseAbi([
     "function send_signal(uint256 lobby_id, uint256 table_id, address recipient, bytes encrypted_data)",
@@ -29,7 +29,7 @@ export function useListenForSignals(myWalletAddress, onSignalReceived) {
         address: SIGNAL_CONTRACT_ADDRESS,
         abi: SIGNAL_ABI,
         eventName: 'HandshakeSignal',
-        pollingInterval: 4000,
+        pollingInterval: CHAIN_POLLING_INTERVAL,
         onLogs: (logs) => {
             logs.forEach(log => {
                 const { sender, lobby_id, table_id, recipient, encrypted_data } = log.args;

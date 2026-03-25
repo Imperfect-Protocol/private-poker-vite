@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { useAppKitAccount, useAppKit } from '@reown/appkit/react'
 import { useDisconnect, useConnection, useBalance, useWatchBlockNumber } from 'wagmi'
 import { formatUnits } from 'viem';
-import { CHAIN_ID } from '@/lib/chain';
+import { CHAIN_ID, CHAIN_POLLING_INTERVAL } from '@/lib/chain';
 
 
 export default function WalletAuth() {
@@ -23,6 +23,7 @@ export default function WalletAuth() {
   // 3. Listen for new blocks and trigger a refetch
   useWatchBlockNumber({
     chainId: CHAIN_ID,
+    pollingInterval: CHAIN_POLLING_INTERVAL,
     onBlockNumber() {
       if (address) {
         refetch();

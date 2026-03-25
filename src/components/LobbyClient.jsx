@@ -6,7 +6,7 @@ import GameLobby from '@/components/GameLobby';
 import { usePrivatePokerLobby, useListenForNewTables } from '@/hooks/usePrivatePokerLobby';
 import { getBlindsForBuyin } from '@/lib/stakes';
 import { getGameTypeName, getTableState } from '@/lib/constants';
-import { CHAIN_ID } from '@/lib/chain';
+import { CHAIN_ID, CHAIN_POLLING_INTERVAL } from '@/lib/chain';
 
 // 1. Accept 'id' directly as a prop
 export default function LobbyClient({ id }) {
@@ -28,6 +28,7 @@ export default function LobbyClient({ id }) {
 
   useWatchBlockNumber({
     chainId: CHAIN_ID,
+    pollingInterval: CHAIN_POLLING_INTERVAL,
     onBlockNumber() {
       setRefreshTrigger(prev => prev + 1);
     },
