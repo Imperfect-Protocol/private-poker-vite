@@ -90,7 +90,7 @@ export default function PokerTable({ tableData, currentUserAddress = "" }) {
   };
 
   return (
-    <div className="relative w-full max-w-4xl aspect-[16/9] mx-auto mt-10 mb-20">
+    <div className="relative w-full bottom-28 max-w-4xl aspect-[16/9] mx-auto mt-20 mb-0">
 
       {/* 1. THE TABLE IMAGE */}
       <div className="absolute inset-0 rounded-[100px] border-4 border-teal-500/10 shadow-[0_0_60px_rgba(20,184,166,0.15)] overflow-hidden">

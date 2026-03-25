@@ -127,6 +127,7 @@ export function usePokerRTC(tableId, lobbyId, blsKeys, tableCreatorAddress, tabl
   }, [address, tableCreatorAddress, tableCreatorPubKey, blsKeys?.publicKey]);
 
   const sendMessage = (msg) => {
+    setStatus("connected"); // TODO: implement p2p
     Object.values(peersRef.current).forEach(pc => {
       // Find data channels and send
     });

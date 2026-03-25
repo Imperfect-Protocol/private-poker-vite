@@ -19,9 +19,9 @@ export default function App() {
           <Route path="/about" element={<AboutPage />} />
           <Route path="/leaderboard" element={<LeaderboardPage />} />
           <Route path="/lobby/:id" element={<LobbyPage />} />
-          <Route path="/tables/:id" element={<TablePage />} />
-          <Route path="/tables/create" element={<CreateTablePage />} />
         </Route>
+        <Route path="/tables/:id" element={<TablePage />} />
+        <Route path="/tables/create" element={<CreateTablePage />} />
       </Routes>
     </BrowserRouter>
   );
