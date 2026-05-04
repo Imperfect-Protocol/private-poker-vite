@@ -1,19 +1,19 @@
 [package]
 name = "sadhbh-c0d3/private-poker"
-version = "0.1.5"
+version = "0.2.1"
 description = "Private Poker"
 
 [dependencies]
-"php/php" = "^8.3.4"
+"sadhbh-c0d3/edgejs-quickjs" = "^0.0.1"
 
 [fs]
-"/app/dist" = "./dist"
-"/app/server" = "./server"
+"/dist" = "./dist"
+"/server" = "./server"
 
 [[command]]
 name = "run"
-module = "php/php:php"
-runner = "wasi"
+module = "sadhbh-c0d3/edgejs-quickjs:edge"
+runner = "https://webc.org/runner/wasi"
 
 [command.annotations.wasi]
-main-args = ["-t", "/app/dist", "-S", "0.0.0.0:8080", "/app/server/router.php"]
+main-args = ["/server/router.cjs"]
