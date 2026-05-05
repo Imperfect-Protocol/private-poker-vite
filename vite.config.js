@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-// import { viteSingleFile } from 'vite-plugin-singlefile'
+import { standalone } from 'vite-plugin-standalone'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
@@ -13,7 +13,11 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
-    // viteSingleFile()
+    standalone({
+      entry: {
+        index: './server/standalone-entry.js',
+      },
+    }),
   ],
   server: {
     port: 3000,

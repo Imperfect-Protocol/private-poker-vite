@@ -1,8 +1,10 @@
-const fs = require('fs');
-const http = require('http');
-const path = require('path');
+/* global process */
 
-const root = '/dist';
+import fs from 'node:fs';
+import http from 'node:http';
+import path from 'node:path';
+
+const root = process.env.STATIC_ROOT || '/dist';
 const port = Number(process.env.PORT || 8080);
 
 const mimeTypes = {
@@ -86,11 +88,11 @@ http.createServer((req, res) => {
     });
     res.end(req.method === 'HEAD' ? undefined : body);
   } catch (err) {
-    console.error('router.cjs failed:', err && (err.stack || err));
+    console.error('standalone-entry failed:', err && (err.stack || err));
     send(res, 500, 'internal server error\n', {
       'content-type': 'text/plain; charset=utf-8',
     });
   }
 }).listen(port, '0.0.0.0', () => {
-  console.log(`private-poker vite served by EdgeJS QuickJS on 0.0.0.0:${port}`);
+  console.log(`vite app served by EdgeJS QuickJS on 0.0.0.0:${port}`);
 });

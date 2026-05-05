@@ -1,0 +1,21 @@
+[package]
+name = "sadhbh-c0d3/private-poker"
+version = "0.2.1"
+description = "Private Poker"
+
+[fs]
+"/dist" = "./dist"
+
+[[module]]
+name = "edge"
+# source = "/Users/sadhbh/src/dev/wasmer-io/edgejs/build-quickjs-wasix/edge.wasm"
+source = "/Users/sadhbh/src/dev/edgejs/build-quickjs-wasix/edge.wasm"
+
+[[command]]
+name = "run"
+module = "edge"
+runner = "https://webc.org/runner/wasi"
+
+[command.annotations.wasi]
+atom = "edge"
+main-args = ["/dist/server/standalone-entry.js"]

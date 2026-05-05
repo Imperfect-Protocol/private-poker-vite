@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && vite build --ssr server/standalone-entry.js --outDir dist/server --emptyOutDir false",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -38,6 +38,6 @@
     "postcss": "^8.5.8",
     "tailwindcss": "^4.2.2",
     "vite": "^8.0.1",
-    "vite-plugin-singlefile": "^2.3.2"
+    "vite-plugin-standalone": "^2.0.0-alpha.5"
   }
 }
