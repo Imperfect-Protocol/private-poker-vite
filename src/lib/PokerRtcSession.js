@@ -1126,12 +1126,33 @@ export class PokerRtcSession {
     return sent;
   }
 
-  async sendOffer(peer, { immediate = false } = {}) {
+  async sendOffer(peer, {
+    immediate = false,
+    forceSignalServer = false,
+    signalFallbackOnWaiting = false,
+  } = {}) {
     const { playerAddress, operatorPrivateKey, publicKey, tableId, lobbyId } = this.config;
-    if (!playerAddress || !operatorPrivateKey || !publicKey || !tableId || !lobbyId || !peer?.playerAddress || !peer?.annoncePublicKey) return;
+    if (!playerAddress || !operatorPrivateKey || !publicKey || !tableId || !lobbyId || !peer?.playerAddress || !peer?.annoncePublicKey) {
+      const missing = {
+        playerAddress: Boolean(playerAddress),
+        operatorPrivateKey: Boolean(operatorPrivateKey),
+        publicKey: Boolean(publicKey),
+        tableId: Boolean(tableId),
+        lobbyId: Boolean(lobbyId),
+        peerPlayerAddress: Boolean(peer?.playerAddress),
+        peerAnnouncePublicKey: Boolean(peer?.annoncePublicKey),
+      };
+      this.logActivity(`offer skipped ${formatPeer(peer?.playerAddress)}: missing bootstrap data`, missing);
+      throw new Error('Cannot send P2P offer yet; bootstrap data is incomplete.');
+    }
 
     try {
       this.hasConnectionError = false;
+      this.logActivity(`offer start ${formatPeer(peer.playerAddress)}`, {
+        immediate,
+        forceSignalServer,
+        signalFallbackOnWaiting,
+      });
       const pc = this.createPeerConnection(peer.playerAddress, RTC_LINK.INBOUND, true);
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -1141,12 +1162,14 @@ export class PokerRtcSession {
         direction: RTC_LINK.INBOUND,
         sdp: pc.localDescription.sdp,
       };
-      const sentViaPool = await this.sendPooledEncryptedSignal(
-        peer.playerAddress,
-        peer.annoncePublicKey,
-        signal,
-      );
-      if (sentViaPool === 'waiting_for_table') {
+      const sentViaPool = forceSignalServer
+        ? false
+        : await this.sendPooledEncryptedSignal(
+          peer.playerAddress,
+          peer.annoncePublicKey,
+          signal,
+        );
+      if (sentViaPool === 'waiting_for_table' && !signalFallbackOnWaiting) {
         this.setSubscriptionState(peer.playerAddress, RTC_LINK.INBOUND, SUBSCRIPTION_STATE.CREATED);
         return;
       }
@@ -1156,6 +1179,11 @@ export class PokerRtcSession {
       }
       this.setSubscriptionState(peer.playerAddress, RTC_LINK.INBOUND, SUBSCRIPTION_STATE.OFFER_SENT);
       this.startOfferTimeout(peer.playerAddress);
+      this.logActivity(`offer sent ${formatPeer(peer.playerAddress)}`, {
+        immediate,
+        forceSignalServer,
+        signalFallbackOnWaiting,
+      });
       this.emitState();
     } catch (error) {
       this.hasConnectionError = true;
@@ -1187,6 +1215,35 @@ export class PokerRtcSession {
       playerAddress: peerPlayerAddress,
       annoncePublicKey: peerAnnouncePubKey,
     }, { immediate: immediateOffer });
+  }
+
+  async pokeInboundConnection(peerPlayerAddress, peerAnnouncePubKey, callback) {
+    const peerKey = normalizeAddress(peerPlayerAddress);
+    if (!peerKey) {
+      this.logActivity('poke ignored: missing inbound peer');
+      return;
+    }
+
+    const existing = this.getSubscription(peerPlayerAddress, RTC_LINK.INBOUND);
+    const publicAnnounceKey = peerAnnouncePubKey ?? existing?.publicAnnounceKey;
+    if (!publicAnnounceKey) {
+      this.logActivity(`poke ignored ${formatPeer(peerPlayerAddress)}: missing announce key`);
+      return;
+    }
+
+    if (!existing) {
+      this.createSubscription(peerPlayerAddress, publicAnnounceKey, RTC_LINK.INBOUND, callback);
+    } else {
+      existing.publicAnnounceKey = publicAnnounceKey;
+      if (callback) existing.callback = callback;
+    }
+
+    this.emitActivity(`${formatSeat(peerPlayerAddress)} :: Poke ${formatKey(publicAnnounceKey)}`);
+    this.resetPeerLink(peerPlayerAddress, RTC_LINK.INBOUND, 'poke');
+    await this.sendOffer({
+      playerAddress: peerPlayerAddress,
+      annoncePublicKey: publicAnnounceKey,
+    }, { immediate: true, signalFallbackOnWaiting: true });
   }
 
   async sendAccept(peerAddress, peerPubKey, offerSdp, direction = RTC_LINK.OUTBOUND, { viaDataChannel = false, viaPool = false } = {}) {

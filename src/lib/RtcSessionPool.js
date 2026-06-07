@@ -879,6 +879,15 @@ class RtcSessionPool {
     });
   }
 
+  hasOpenLobbyMeshLink() {
+    return [...this.links.values()].some((links) => (
+      links.some((link) => (
+        link.direction === ENDPOINT.LOBBY
+        && link.channel?.readyState === 'open'
+      ))
+    ));
+  }
+
   remember(messageId) {
     if (!messageId) return false;
     if (this.seenMessages.has(messageId)) return false;

@@ -4,11 +4,14 @@ import { useEffect, useRef, useState } from 'react';
 import { MousePointerClick } from 'lucide-react';
 import FlowStepDialog from '@/components/table_screen/dialogs/FlowStepDialog';
 
+const POKE_SEARCH_MS = 10000;
+
 const peerConnectionStatus = (state) => {
   if (state === 'Connected') return 'connected';
   if (state === 'Disconnected' || state === 'OfferTimeout') return 'not connected';
-  if (state === 'OfferSent' || state === 'AcceptSent' || state === 'AcceptReceived' || state === 'Created') return 'connecting';
-  return 'connecting';
+  if (state === 'AcceptSent' || state === 'AcceptReceived') return 'Connecting';
+  if (state === 'OfferSent' || state === 'Created') return 'Searching';
+  return 'Searching';
 };
 
 const subscriptionStatus = (state) => {
@@ -18,11 +21,9 @@ const subscriptionStatus = (state) => {
   return 'listening';
 };
 
-const canRetryInbound = (state) => (
-  state === 'Created'
-  || state === 'Disconnected'
-  || state === 'OfferSent'
-  || state === 'OfferTimeout'
+const isRtcConnectingState = (state) => (
+  state === 'AcceptSent'
+  || state === 'AcceptReceived'
 );
 
 export default function ReJoinTableFlowDialog({
@@ -33,8 +34,21 @@ export default function ReJoinTableFlowDialog({
 }) {
   const startedRef = useRef(false);
   const readyRef = useRef(false);
+  const pokeSearchTimerRef = useRef(null);
   const [signatureStatus, setSignatureStatus] = useState('unverified');
   const [error, setError] = useState('');
+  const [isSearchCycleActive, setIsSearchCycleActive] = useState(true);
+
+  const startSearchCycle = () => {
+    if (pokeSearchTimerRef.current) {
+      clearTimeout(pokeSearchTimerRef.current);
+    }
+    setIsSearchCycleActive(true);
+    pokeSearchTimerRef.current = setTimeout(() => {
+      pokeSearchTimerRef.current = null;
+      setIsSearchCycleActive(false);
+    }, POKE_SEARCH_MS);
+  };
 
   useEffect(() => {
     if (startedRef.current) return;
@@ -56,12 +70,39 @@ export default function ReJoinTableFlowDialog({
     run();
   }, [onEnableNetwork, table]);
 
+  useEffect(() => {
+    startSearchCycle();
+    return () => {
+      if (pokeSearchTimerRef.current) {
+        clearTimeout(pokeSearchTimerRef.current);
+      }
+    };
+  }, []);
+
   const inboundStatus = peerConnectionStatus(networkSnapshot?.inboundState);
   const outboundStatus = subscriptionStatus(networkSnapshot?.outboundState);
-  const canPokeInbound = canRetryInbound(networkSnapshot?.inboundState);
+  const isInboundConnected = networkSnapshot?.inboundState === 'Connected';
+  const isRtcConnecting = isRtcConnectingState(networkSnapshot?.inboundState);
+  const canPokeInbound = signatureStatus === 'active'
+    && !isInboundConnected
+    && !isSearchCycleActive;
+  const shownInboundStatus = isRtcConnecting
+    ? 'Connecting'
+    : isSearchCycleActive
+      ? 'Searching'
+      : inboundStatus;
   const isComplete = signatureStatus === 'active'
     && inboundStatus === 'connected'
     && outboundStatus === 'peer subscribed';
+
+  useEffect(() => {
+    if (!isInboundConnected) return;
+    if (pokeSearchTimerRef.current) {
+      clearTimeout(pokeSearchTimerRef.current);
+      pokeSearchTimerRef.current = null;
+    }
+    setIsSearchCycleActive(false);
+  }, [isInboundConnected]);
 
   useEffect(() => {
     if (!isComplete || readyRef.current) return;
@@ -86,12 +127,25 @@ export default function ReJoinTableFlowDialog({
         {
           id: 'inbound',
           label: 'Peer Connection',
-          status: canPokeInbound ? '' : inboundStatus,
+          status: canPokeInbound ? '' : shownInboundStatus,
+          statusTone: ['Searching', 'Connecting'].includes(shownInboundStatus) ? 'connecting' : undefined,
           action: canPokeInbound ? (
             <button
               type="button"
-              onClick={() => {
-                table.retryInboundConnection?.();
+              onClick={async () => {
+                setError('');
+                startSearchCycle();
+                try {
+                  await table.retryInboundConnection?.();
+                } catch (err) {
+                  console.error(err);
+                  if (pokeSearchTimerRef.current) {
+                    clearTimeout(pokeSearchTimerRef.current);
+                    pokeSearchTimerRef.current = null;
+                  }
+                  setIsSearchCycleActive(false);
+                  setError(err.shortMessage || err.details || err.message || 'Poke failed.');
+                }
               }}
               className="inline-flex cursor-pointer items-center gap-1.5 rounded border border-yellow-300/70 bg-yellow-400/15 px-2 py-1 text-[10px] font-black uppercase tracking-widest text-yellow-100 shadow-[0_0_16px_rgba(250,204,21,0.22)] transition-colors hover:border-yellow-200 hover:bg-yellow-300/25 hover:text-white"
             >

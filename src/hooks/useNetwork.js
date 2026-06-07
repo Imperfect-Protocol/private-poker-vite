@@ -114,6 +114,14 @@ export function useNetwork({
       lobbyId: payload.lobbyId,
       tableId: payload.tableId,
     });
+    if (!rtcSessionPool.hasOpenLobbyMeshLink()) {
+      const route = {
+        found: false,
+        reason: 'no_lobby_mesh',
+      };
+      console.log('[RTC route] lobby route not found', route);
+      return route;
+    }
     const route = await rtcSessionPool.requestLobbyRoute(payload);
     console.log(`[RTC route] lobby route ${route.found ? 'found' : 'not found'}`, route);
     return route;
@@ -263,6 +271,24 @@ export function useNetwork({
     session,
   ]);
 
+  const pokeInboundConnection = useCallback(async (peerPlayerAddress, peerAnnouncePubKey, callback) => {
+    console.log('[RTC signal] Poke immediate start', {
+      peer: peerPlayerAddress,
+      lobbyId,
+      tableId,
+    });
+    await session.pokeInboundConnection(peerPlayerAddress, peerAnnouncePubKey, callback);
+    console.log('[RTC signal] Poke immediate done', {
+      peer: peerPlayerAddress,
+      lobbyId,
+      tableId,
+    });
+  }, [
+    lobbyId,
+    session,
+    tableId,
+  ]);
+
   const prepareNetworkSession = useCallback(async () => {
     return controlActions.enqueueAction(
       'BLS key generation',
@@ -288,5 +314,6 @@ export function useNetwork({
     armDropNextMessage,
     armDuplicateNextMessage,
     prepareHandSession,
+    pokeInboundConnection,
   ];
 }
