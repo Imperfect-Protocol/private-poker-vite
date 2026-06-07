@@ -18,7 +18,12 @@ const subscriptionStatus = (state) => {
   return 'listening';
 };
 
-const canRetryInbound = (state) => state === 'Disconnected' || state === 'OfferTimeout';
+const canRetryInbound = (state) => (
+  state === 'Created'
+  || state === 'Disconnected'
+  || state === 'OfferSent'
+  || state === 'OfferTimeout'
+);
 
 export default function ReJoinTableFlowDialog({
   table,

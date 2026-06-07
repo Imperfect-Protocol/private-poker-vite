@@ -2,8 +2,6 @@ const DEFAULT_PRIVATE_MESH_ENDPOINTS = [{
   url: 'http://127.0.0.1:3000/resu',
 }];
 
-const CLIENT_OPEN_TIMEOUT_MS = 11_500;
-
 const cleanUrl = (value) => String(value ?? '').trim().replace(/\/+$/, '');
 
 const firstEnv = (...names) => names
@@ -176,7 +174,10 @@ function openSession(url, firstSignal) {
     key,
     url,
     socket,
-    queue: [],
+    queue: [{
+      type: 'bootstrap-interest',
+      signal: firstSignal,
+    }],
     pendingSignals: new Map(),
     ready,
   };
@@ -184,17 +185,13 @@ function openSession(url, firstSignal) {
 
   activeSessions.set(key, session);
 
-  const openTimer = window.setTimeout(() => {
-    rejectReady(new Error(`${url} bootstrap websocket did not open`));
-  }, CLIENT_OPEN_TIMEOUT_MS);
-
   socket.addEventListener('open', () => {
-    window.clearTimeout(openTimer);
     console.log('[RTC signal] Private Mesh bootstrap open', {
       url,
       lobbyId: firstSignal.lobbyId,
       tableId: firstSignal.tableId,
       peer: firstSignal.targetAddress,
+      queued: session.queue.length,
     });
     for (const queued of session.queue.splice(0)) {
       socket.send(JSON.stringify(queued));
@@ -220,7 +217,6 @@ function openSession(url, firstSignal) {
   });
 
   socket.addEventListener('error', (event) => {
-    window.clearTimeout(openTimer);
     console.log('[RTC signal] Private Mesh bootstrap error', {
       url,
       lobbyId: firstSignal.lobbyId,
@@ -233,7 +229,6 @@ function openSession(url, firstSignal) {
   }, { once: true });
 
   socket.addEventListener('close', (event) => {
-    window.clearTimeout(openTimer);
     activeSessions.delete(key);
     console.log('[RTC signal] Private Mesh bootstrap close', {
       url,
@@ -244,7 +239,8 @@ function openSession(url, firstSignal) {
       wasClean: event.wasClean,
       pending: session.pendingSignals.size,
     });
-    for (const signal of session.pendingSignals.values()) {
+    const pendingSignals = [...session.pendingSignals.values()];
+    for (const signal of pendingSignals) {
       emitBootstrapEvent({
         type: 'bootstrap-close',
         url,
@@ -278,6 +274,15 @@ async function sendBootstrapSignal(url, signal) {
 
   await session.ready;
   rememberPendingSignal(session, signal);
+  console.log('[RTC signal] Private Mesh bootstrap send', {
+    url,
+    lobbyId: signal.lobbyId,
+    tableId: signal.tableId,
+    peer: signal.targetAddress,
+    kind: signal.kind,
+    opened: false,
+    readyState: session.socket.readyState,
+  });
   sendSessionMessage(session, {
     type: isAnswerKind(signal.kind) ? 'bootstrap-answer' : 'bootstrap-interest',
     signal,
@@ -313,7 +318,7 @@ export async function publishPrivateMeshSignals(signals) {
   };
 }
 
-export async function publishPrivateMeshGood({ originAddress, lobbyId, tableId } = {}) {
+export async function publishPrivateMeshBye({ originAddress, lobbyId, tableId } = {}) {
   const address = normalizeAddress(originAddress);
   if (!address || !lobbyId || !tableId) return;
 
@@ -327,7 +332,7 @@ export async function publishPrivateMeshGood({ originAddress, lobbyId, tableId }
     for (const [key, session] of activeSessions) {
       if (!key.startsWith(prefix)) continue;
       await session.ready;
-      sendSessionMessage(session, { type: 'bootstrap-good' });
+      sendSessionMessage(session, { type: 'bootstrap-bye' });
       session.pendingSignals.clear();
     }
   }

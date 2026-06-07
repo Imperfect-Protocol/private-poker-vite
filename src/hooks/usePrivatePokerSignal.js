@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useConnection } from 'wagmi';
 import {
   getPrivateMeshUrls,
-  publishPrivateMeshGood,
+  publishPrivateMeshBye,
   publishPrivateMeshSignals,
   subscribeToPrivateMeshBootstrapEvents,
   subscribeToPrivateMeshSignals,
@@ -31,8 +31,8 @@ export function usePrivatePokerSignal({ playerAddress } = {}) {
     }
 
     const kind = options.signalType ?? options.kind ?? 'offer';
-    if (kind === 'good') {
-      return publishPrivateMeshGood({
+    if (kind === 'bye') {
+      return publishPrivateMeshBye({
         originAddress: senderAddress,
         lobbyId: lobbyId?.toString?.() ?? String(lobbyId),
         tableId: tableId?.toString?.() ?? String(tableId),
