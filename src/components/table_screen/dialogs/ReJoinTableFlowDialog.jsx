@@ -38,11 +38,13 @@ export default function ReJoinTableFlowDialog({
   const [signatureStatus, setSignatureStatus] = useState('unverified');
   const [error, setError] = useState('');
   const [isSearchCycleActive, setIsSearchCycleActive] = useState(true);
+  const [hasRtcConnecting, setHasRtcConnecting] = useState(false);
 
   const startSearchCycle = () => {
     if (pokeSearchTimerRef.current) {
       clearTimeout(pokeSearchTimerRef.current);
     }
+    setHasRtcConnecting(false);
     setIsSearchCycleActive(true);
     pokeSearchTimerRef.current = setTimeout(() => {
       pokeSearchTimerRef.current = null;
@@ -86,7 +88,7 @@ export default function ReJoinTableFlowDialog({
   const canPokeInbound = signatureStatus === 'active'
     && !isInboundConnected
     && !isSearchCycleActive;
-  const shownInboundStatus = isRtcConnecting
+  const shownInboundStatus = isRtcConnecting || hasRtcConnecting
     ? 'Connecting'
     : isSearchCycleActive
       ? 'Searching'
@@ -101,8 +103,13 @@ export default function ReJoinTableFlowDialog({
       clearTimeout(pokeSearchTimerRef.current);
       pokeSearchTimerRef.current = null;
     }
+    setHasRtcConnecting(false);
     setIsSearchCycleActive(false);
   }, [isInboundConnected]);
+
+  useEffect(() => {
+    if (isRtcConnecting) setHasRtcConnecting(true);
+  }, [isRtcConnecting]);
 
   useEffect(() => {
     if (!isComplete || readyRef.current) return;

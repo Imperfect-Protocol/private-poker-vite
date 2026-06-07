@@ -114,14 +114,6 @@ export function useNetwork({
       lobbyId: payload.lobbyId,
       tableId: payload.tableId,
     });
-    if (!rtcSessionPool.hasOpenLobbyMeshLink()) {
-      const route = {
-        found: false,
-        reason: 'no_lobby_mesh',
-      };
-      console.log('[RTC route] lobby route not found', route);
-      return route;
-    }
     const route = await rtcSessionPool.requestLobbyRoute(payload);
     console.log(`[RTC route] lobby route ${route.found ? 'found' : 'not found'}`, route);
     return route;

@@ -1148,6 +1148,11 @@ export class PokerRtcSession {
 
     try {
       this.hasConnectionError = false;
+      if (this.connectedLinks.has(linkKey(peer.playerAddress, RTC_LINK.INBOUND))) {
+        this.logActivity(`offer skipped ${formatPeer(peer.playerAddress)}: inbound already connected`);
+        this.setSubscriptionState(peer.playerAddress, RTC_LINK.INBOUND, SUBSCRIPTION_STATE.CONNECTED);
+        return;
+      }
       this.logActivity(`offer start ${formatPeer(peer.playerAddress)}`, {
         immediate,
         forceSignalServer,
@@ -1224,6 +1229,12 @@ export class PokerRtcSession {
       return;
     }
 
+    if (this.connectedLinks.has(linkKey(peerPlayerAddress, RTC_LINK.INBOUND))) {
+      this.logActivity(`poke ignored ${formatPeer(peerPlayerAddress)}: inbound already connected`);
+      this.setSubscriptionState(peerPlayerAddress, RTC_LINK.INBOUND, SUBSCRIPTION_STATE.CONNECTED);
+      return;
+    }
+
     const existing = this.getSubscription(peerPlayerAddress, RTC_LINK.INBOUND);
     const publicAnnounceKey = peerAnnouncePubKey ?? existing?.publicAnnounceKey;
     if (!publicAnnounceKey) {
@@ -1243,7 +1254,7 @@ export class PokerRtcSession {
     await this.sendOffer({
       playerAddress: peerPlayerAddress,
       annoncePublicKey: publicAnnounceKey,
-    }, { immediate: true, signalFallbackOnWaiting: true });
+    }, { immediate: true });
   }
 
   async sendAccept(peerAddress, peerPubKey, offerSdp, direction = RTC_LINK.OUTBOUND, { viaDataChannel = false, viaPool = false } = {}) {
