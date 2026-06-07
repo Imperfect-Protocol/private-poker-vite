@@ -1,108 +1,95 @@
-// contexts/BLSContext.js
 "use client";
 
-import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { useConnection, useSignMessage } from 'wagmi';
-import { keccak256, toBytes } from 'viem';
-import * as bls from '@noble/bls12-381';
+import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { deriveHandSessionKeys, deriveTableSessionKeys } from '@/lib/accountSession';
+import { useAccountSession } from '@/contexts/AccountSessionContext.jsx';
 
-const DERIVATION_MESSAGE = `Welcome to Private Poker!
+const normalizeAddress = (value) => value?.toLowerCase() ?? '';
 
-Sign this message to generate your secure in-game communication key. 
-
-This key is used to encrypt your peer-to-peer WebRTC signals and verify your actions at the table.
-
-This request will not trigger a blockchain transaction or cost any gas.`;
+export function makeTableBlsSessionKey(tableDetails, walletAddress) {
+    if (!tableDetails?.lobbyId || !tableDetails?.tableId || !walletAddress) return null;
+    return [
+        normalizeAddress(walletAddress),
+        tableDetails.lobbyId,
+        tableDetails.tableId,
+    ].join(':');
+}
 
 const BLSContext = createContext(null);
 
 export function BLSProvider({ children }) {
-    const { address, isConnected } = useConnection();
-    const { mutateAsync } = useSignMessage();
+    const { accountSession, requireSession } = useAccountSession();
 
-    const [blsKeys, setBlsKeys] = useState(null);
+    const [tableKeys, setTableKeys] = useState({});
     const [isGenerating, setIsGenerating] = useState(false);
-    const [activeAddress, setActiveAddress] = useState(address);
+    const [activeAddress, setActiveAddress] = useState(accountSession?.walletAddress);
 
-    const channelRef = useRef(null);
-    const promptLock = useRef(false); // The lock that kills the infinite loop
-
-    // 1. Wipe keys if the user disconnects or changes accounts
     useEffect(() => {
-        if (!isConnected || !address) {
-            setBlsKeys(null);
+        const address = accountSession?.walletAddress;
+        if (!address) {
+            setTableKeys({});
             setActiveAddress(null);
-            promptLock.current = false;
         } else if (activeAddress && address !== activeAddress) {
-            // THE FIX: Wallet switched! Nuke the old keys.
-            setBlsKeys(null);
+            setTableKeys({});
             setActiveAddress(address);
-            promptLock.current = false;
         } else if (!activeAddress && address) {
             setActiveAddress(address);
         }
-    }, [isConnected, address, activeAddress]);
+    }, [accountSession?.walletAddress, activeAddress]);
 
-    // 2. Cross-tab sync
-    useEffect(() => {
-        channelRef.current = new BroadcastChannel('poker_key_sync');
+    const getKeys = useCallback((tableDetails) => {
+        const sessionKey = makeTableBlsSessionKey(tableDetails, accountSession?.walletAddress);
+        return sessionKey ? tableKeys[sessionKey] ?? null : null;
+    }, [accountSession?.walletAddress, tableKeys]);
 
-        channelRef.current.onmessage = (event) => {
-            const { type, keys, owner } = event.data;
-            if (type === 'SHARE_KEY' && owner === address && !blsKeys) {
-                setBlsKeys(keys);
-                promptLock.current = true; // Lock prompts since we got the key
-            } else if (type === 'REQUEST_KEY' && blsKeys) {
-                channelRef.current.postMessage({ type: 'SHARE_KEY', keys: blsKeys, owner: address });
-            }
-        };
+    const generateKeys = useCallback(async (tableDetails) => {
+        const session = await requireSession();
 
-        if (isConnected && address && !blsKeys) {
-            channelRef.current.postMessage({ type: 'REQUEST_KEY' });
+        const sessionKey = makeTableBlsSessionKey(tableDetails, session.walletAddress);
+        if (!sessionKey) {
+            throw new Error('Table details are required before creating a table session key.');
         }
+        if (tableKeys[sessionKey]) return tableKeys[sessionKey];
 
-        return () => channelRef.current?.close();
-    }, [isConnected, address, blsKeys]);
-
-    // 3. The Derivation Logic
-    const generateKeys = useCallback(async () => {
-        // If we don't have an address, or we are already asking, abort!
-        if (!address || promptLock.current) return;
-
-        promptLock.current = true;
         setIsGenerating(true);
 
         try {
-            const signature = await mutateAsync({ message: DERIVATION_MESSAGE });
-            const seedHex = keccak256(signature);
-            const privateKeyBytes = toBytes(seedHex);
-            const publicKeyBytes = bls.getPublicKey(privateKeyBytes);
+            const keys = await deriveTableSessionKeys(session, tableDetails, sessionKey);
+            console.log('operator', {
+                tableId: tableDetails.tableId?.toString(),
+                lobbyId: tableDetails.lobbyId?.toString(),
+                address: keys.operator,
+            });
 
-            const keys = {
-                privateKey: Buffer.from(privateKeyBytes).toString('hex'),
-                publicKey: Buffer.from(publicKeyBytes).toString('hex')
-            };
-
-            console.log("Generate BLS Keys", `0x${keys.publicKey}`);
-
-            setBlsKeys(keys);
-            channelRef.current?.postMessage({ type: 'SHARE_KEY', keys, owner: address });
+            setTableKeys((current) => ({
+                ...current,
+                [sessionKey]: keys,
+            }));
             return keys;
         } catch (error) {
             console.error("User cancelled or signature failed:", error);
-            promptLock.current = false; // Unlock so they can try again later
             throw error;
         } finally {
             setIsGenerating(false);
         }
-    }, [address, mutateAsync]);
+    }, [requireSession, tableKeys]);
+
+    const generateHandKeys = useCallback(async (tableDetails, handNumber) => {
+        const session = await requireSession();
+        return deriveHandSessionKeys(session, tableDetails, handNumber);
+    }, [requireSession]);
     
     return (
-        <BLSContext.Provider value={{ blsKeys, isGenerating, generateKeys, isConnected }}>
+        <BLSContext.Provider value={{
+            getKeys,
+            isGenerating,
+            generateKeys,
+            generateHandKeys,
+            isConnected: Boolean(accountSession),
+        }}>
             {children}
         </BLSContext.Provider>
     );
 }
 
-// Custom hook to use the context easily
 export const useBLS = () => useContext(BLSContext);

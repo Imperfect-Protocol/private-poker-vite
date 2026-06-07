@@ -1,10 +1,10 @@
 [package]
 name = "sadhbh-c0d3/private-poker"
-version = "0.2.3"
-description = "Private Poker"
+version = "0.3.1"
+description = "Private Poker (Vite)"
 
 [dependencies]
-"sadhbh-c0d3/edgejs-quickjs" = "^0.0.3"
+"sadhbh-c0d3/edgejs-quickjs" = "^0.2.0"
 
 [fs]
 "/dist" = "./dist"
