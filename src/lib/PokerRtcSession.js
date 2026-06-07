@@ -1277,22 +1277,6 @@ export class PokerRtcSession {
     }
   }
 
-  handleBootstrapEvent(event) {
-    if (event?.type !== 'bootstrap-close') return;
-    const { tableId, lobbyId } = this.config;
-    if (event.tableId !== tableId?.toString?.() || event.lobbyId !== lobbyId?.toString?.()) return;
-
-    const peerAddress = event.targetAddress;
-    const peerKey = normalizeAddress(peerAddress);
-    const subscription = this.getSubscription(peerAddress, RTC_LINK.INBOUND);
-    const isConnected = this.connectedLinks.has(linkKey(peerAddress, RTC_LINK.INBOUND));
-    if (!peerKey || !subscription || isConnected) return;
-
-    this.clearOfferTimeout(peerAddress);
-    this.emitActivity(`${formatSeat(peerAddress)} !! Bootstrap Closed ${formatKey(this.getPlayerPublicKey(peerAddress))}`);
-    this.setSubscriptionState(peerAddress, RTC_LINK.INBOUND, SUBSCRIPTION_STATE.DISCONNECTED);
-  }
-
   async handleSignal(signalData) {
     const { playerAddress, operator, privateKey, tableId, lobbyId } = this.config;
     if (!tableId || !lobbyId) return;

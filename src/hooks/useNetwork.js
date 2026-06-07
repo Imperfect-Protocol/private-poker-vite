@@ -227,10 +227,6 @@ export function useNetwork({
   useListenForSignals(playerAddress, lobbyId, tableId, async (signalData) => {
     console.log('handleSignal', signalData);
     await controlActions.enqueueAction('RTC signal', async () => {
-      if (signalData?.bootstrapEvent) {
-        session.handleBootstrapEvent(signalData);
-        return;
-      }
       await session.handleSignal(signalData);
     }, { dependsOn: [blsActionKey] });
   });

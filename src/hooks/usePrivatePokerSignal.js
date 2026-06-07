@@ -4,7 +4,6 @@ import {
   getPrivateMeshUrls,
   publishPrivateMeshBye,
   publishPrivateMeshSignals,
-  subscribeToPrivateMeshBootstrapEvents,
   subscribeToPrivateMeshSignals,
 } from '@/lib/privateMeshSignal';
 
@@ -120,19 +119,6 @@ export function useListenForSignals(myPlayerAddress, lobbyId, tableId, onSignalR
     };
 
     const unsubscribe = subscribeToPrivateMeshSignals(address, handleMeshSignal);
-    const unsubscribeBootstrapEvents = subscribeToPrivateMeshBootstrapEvents(address, (event) => {
-      if (stopped) return;
-      onSignalReceivedRef.current?.({
-        bootstrapEvent: true,
-        type: event.type,
-        originAddress: event.originAddress,
-        targetAddress: event.targetAddress,
-        lobbyId: event.lobbyId,
-        tableId: event.tableId,
-        kind: event.kind,
-        url: event.url,
-      });
-    });
 
     console.log('[RTC signal] Private Mesh ready', {
       signalServers: getPrivateMeshUrls().length,
@@ -142,7 +128,6 @@ export function useListenForSignals(myPlayerAddress, lobbyId, tableId, onSignalR
     return () => {
       stopped = true;
       unsubscribe?.();
-      unsubscribeBootstrapEvents?.();
     };
   }, [lobbyId, myPlayerAddress, tableId]);
 }

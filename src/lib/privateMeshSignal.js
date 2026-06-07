@@ -22,7 +22,6 @@ const normalizeHex = (value) => {
 };
 
 const signalListeners = new Set();
-const bootstrapEventListeners = new Set();
 const activeSessions = new Map();
 
 function parseEndpointList(value) {
@@ -82,10 +81,6 @@ function bootstrapUrl(url, interest) {
 
 function emitSignal(message) {
   for (const listener of signalListeners) listener(message);
-}
-
-function emitBootstrapEvent(message) {
-  for (const listener of bootstrapEventListeners) listener(message);
 }
 
 function sessionKey(url, signal) {
@@ -239,18 +234,6 @@ function openSession(url, firstSignal) {
       wasClean: event.wasClean,
       pending: session.pendingSignals.size,
     });
-    const pendingSignals = [...session.pendingSignals.values()];
-    for (const signal of pendingSignals) {
-      emitBootstrapEvent({
-        type: 'bootstrap-close',
-        url,
-        originAddress: signal.originAddress,
-        targetAddress: signal.targetAddress,
-        lobbyId: signal.lobbyId,
-        tableId: signal.tableId,
-        kind: signal.kind,
-      });
-    }
     session.pendingSignals.clear();
     if (!readySettled) {
       rejectReady(new Error(`${url} bootstrap websocket closed before match`));
@@ -349,17 +332,4 @@ export function subscribeToPrivateMeshSignals(recipient, onSignal) {
 
   signalListeners.add(listener);
   return () => signalListeners.delete(listener);
-}
-
-export function subscribeToPrivateMeshBootstrapEvents(originAddress, onEvent) {
-  const address = normalizeAddress(originAddress);
-  if (!address) return () => {};
-
-  const listener = (message) => {
-    if (normalizeAddress(message?.originAddress) !== address) return;
-    onEvent(message);
-  };
-
-  bootstrapEventListeners.add(listener);
-  return () => bootstrapEventListeners.delete(listener);
 }
