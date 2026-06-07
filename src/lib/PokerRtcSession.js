@@ -177,6 +177,7 @@ export class PokerRtcSession {
     this.resetLinks = new Set();
     this.offerTimeouts = new Map();
     this.offerRetryTimers = new Map();
+    this.bootstrapGoodSent = new Set();
     this.publishedMessages = new Map();
     this.seenDisagreements = new Set();
     this.publishQueue = Promise.resolve();
@@ -935,6 +936,7 @@ export class PokerRtcSession {
     const isReady = this.getStatus() === 'connected';
     if (isReady && !this.ready) {
       this.emitActivity('[Me]: Ready');
+      this.sendBootstrapGoodOnce();
     }
     if (!isReady && this.ready) {
       this.emitActivity('Me :: Paused');
@@ -955,6 +957,21 @@ export class PokerRtcSession {
     }
     this.emitActivity(`${formatSeat(peerAddress)} ${direction === RTC_LINK.OUTBOUND ? '<=' : '=>'} Connected ${formatKey(this.getPlayerPublicKey(peerAddress))}`);
     this.updateConnectedPeers();
+  }
+
+  sendBootstrapGoodOnce() {
+    const { playerAddress, lobbyId, tableId } = this.config;
+    if (!playerAddress || !lobbyId || !tableId) return;
+
+    const key = `${lobbyId}:${tableId}:${normalizeAddress(playerAddress)}`;
+    if (this.bootstrapGoodSent.has(key)) return;
+    this.bootstrapGoodSent.add(key);
+    void this.sendSignal(lobbyId, tableId, playerAddress, '0x01', {
+      signalType: 'good',
+    }).catch((error) => {
+      this.bootstrapGoodSent.delete(key);
+      this.logActivity(`bootstrap good failed: ${error.message}`);
+    });
   }
 
   isInboundConnected(peerAddress) {
@@ -1149,6 +1166,7 @@ export class PokerRtcSession {
     await this.sendSignal(lobbyId, tableId, recipientAddress, encryptedSignal.encryptedData, {
       playerAddress,
       operatorPrivateKey,
+      signalType: signal.type,
     });
     this.emitActivity(`${formatSeat(recipientAddress)} << ${signal.type === 'accept' ? 'Accept' : 'Offer'} ${formatKey(encryptedSignal.encryptionPublicKey)}`);
   }
@@ -1222,6 +1240,13 @@ export class PokerRtcSession {
       this.hasConnectionError = true;
       this.emitState();
       this.logActivity(`offer failed ${formatPeer(peer.playerAddress)}: ${error.message}`);
+      const peerKey = normalizeAddress(peer.playerAddress);
+      const subscription = this.getSubscription(peer.playerAddress, RTC_LINK.INBOUND);
+      const isConnected = this.connectedLinks.has(linkKey(peer.playerAddress, RTC_LINK.INBOUND));
+      if (peerKey && subscription && !isConnected) {
+        this.setSubscriptionState(peer.playerAddress, RTC_LINK.INBOUND, SUBSCRIPTION_STATE.OFFER_TIMEOUT);
+        this.scheduleOfferRetry(peer.playerAddress);
+      }
       console.error('Failed to send RTC offer:', error);
     }
   }
@@ -1330,6 +1355,23 @@ export class PokerRtcSession {
         this.setSubscriptionState(senderAddress, direction, SUBSCRIPTION_STATE.ACCEPT_RECEIVED);
       }
     }
+  }
+
+  handleBootstrapEvent(event) {
+    if (event?.type !== 'bootstrap-close') return;
+    const { tableId, lobbyId } = this.config;
+    if (event.tableId !== tableId?.toString?.() || event.lobbyId !== lobbyId?.toString?.()) return;
+
+    const peerAddress = event.targetAddress;
+    const peerKey = normalizeAddress(peerAddress);
+    const subscription = this.getSubscription(peerAddress, RTC_LINK.INBOUND);
+    const isConnected = this.connectedLinks.has(linkKey(peerAddress, RTC_LINK.INBOUND));
+    if (!peerKey || !subscription || isConnected) return;
+
+    this.clearOfferTimeout(peerAddress);
+    this.emitActivity(`${formatSeat(peerAddress)} !! Bootstrap Closed ${formatKey(this.getPlayerPublicKey(peerAddress))}`);
+    this.setSubscriptionState(peerAddress, RTC_LINK.INBOUND, SUBSCRIPTION_STATE.OFFER_TIMEOUT);
+    this.scheduleOfferRetry(peerAddress);
   }
 
   async handleSignal(signalData) {
@@ -1481,6 +1523,7 @@ export class PokerRtcSession {
     this.offerTimeouts.clear();
     this.offerRetryTimers.forEach((retryTimer) => clearTimeout(retryTimer));
     this.offerRetryTimers.clear();
+    this.bootstrapGoodSent.clear();
     this.publishedMessages.clear();
     this.seenDisagreements.clear();
     this.localMediaStream = null;
