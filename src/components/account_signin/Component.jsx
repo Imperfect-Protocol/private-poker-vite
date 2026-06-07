@@ -24,7 +24,7 @@ function TierCard({ tier, selected, onSelect }) {
           <p className="mt-2 text-sm leading-6 text-slate-400">{tier.description}</p>
         </div>
         <div className="rounded border border-teal-500/30 bg-slate-950 px-3 py-2 text-right font-mono">
-          <div className="text-lg font-black text-teal-300">${tier.monthlyUsd}</div>
+          <div className="text-lg font-black text-teal-300">{tier.monthlyPpdc} PPDC</div>
           <div className="text-[10px] uppercase tracking-[0.25em] text-teal-700">month</div>
         </div>
       </div>
@@ -41,24 +41,21 @@ function TierCard({ tier, selected, onSelect }) {
   );
 }
 
-function ProfileField({ label, value, field, type = 'text', editable, onChange }) {
+function ProfileField({ label, value, field, type = 'text', editable, disabled = false, onChange }) {
+  const isInputDisabled = disabled || !editable;
+
   return (
     <label className="block">
       <span className="font-mono text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">
         {label}
       </span>
-      {editable ? (
-        <input
-          type={type}
-          value={value}
-          onChange={(event) => onChange(field, event.target.value)}
-          className="mt-2 w-full rounded border border-slate-700 bg-slate-950 px-4 py-3 text-sm font-bold text-white outline-none transition-colors focus:border-teal-400"
-        />
-      ) : (
-        <div className="mt-2 rounded border border-slate-800 bg-slate-950/70 px-4 py-3 text-sm font-bold text-slate-200">
-          {value}
-        </div>
-      )}
+      <input
+        type={type}
+        value={disabled ? '' : value}
+        disabled={isInputDisabled}
+        onChange={(event) => onChange(field, event.target.value)}
+        className="mt-2 w-full rounded border border-slate-700 bg-slate-950 px-4 py-3 text-sm font-bold text-white outline-none transition-colors focus:border-teal-400 disabled:border-slate-800 disabled:bg-slate-950/70 disabled:text-slate-600"
+      />
     </label>
   );
 }
@@ -189,7 +186,7 @@ export default function AccountSignin() {
                 <div>
                   <h2 className="text-2xl font-black uppercase tracking-tight text-white">Profile</h2>
                   <p className="mt-2 text-sm leading-6 text-slate-400">
-                    Display name stays public. Contact and legal details are encrypted into your profile blob.
+                    Display name stays public. Contact and legal details are not stored in this version.
                   </p>
                 </div>
                 {profileMode === 'view' && (
@@ -215,7 +212,8 @@ export default function AccountSignin() {
                   label="Email address"
                   field="email"
                   type="email"
-                  value={profile.email}
+                  value=""
+                  disabled
                   editable={profileMode === 'edit'}
                   onChange={handleProfileChange}
                 />
@@ -223,14 +221,16 @@ export default function AccountSignin() {
                   label="Phone number"
                   field="phone"
                   type="tel"
-                  value={profile.phone}
+                  value=""
+                  disabled
                   editable={profileMode === 'edit'}
                   onChange={handleProfileChange}
                 />
                 <ProfileField
                   label="Legal name"
                   field="legalName"
-                  value={profile.legalName}
+                  value=""
+                  disabled
                   editable={profileMode === 'edit'}
                   onChange={handleProfileChange}
                 />

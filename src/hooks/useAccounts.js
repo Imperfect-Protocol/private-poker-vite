@@ -12,19 +12,21 @@ import {
   readAccountProfileBlob,
 } from '@/lib/accountProfile';
 import { buildAccountSessionTypedData } from '@/lib/accountSession';
-import { PRIVATE_POKER_CONTRACT_ADDRESS, USDC_CONTRACT_ADDRESS } from '@/lib/chain';
+import { PRIVATE_POKER_CONTRACT_ADDRESS, PPDC_CONTRACT_ADDRESS } from '@/lib/chain';
 import { SUBSCRIPTION_TIERS } from '@/lib/constants';
 import { getBufferedGasOverrides } from '@/lib/gas';
 import { publicPokerClient } from '@/lib/publicPokerClient';
 import { useOperatorAddress } from '@/hooks/useOperatorAddress';
 
-const USDC_SCALE = 1_000_000n;
+const PPDC_SCALE = 1_000_000n;
 
-const USDC_ABI = parseAbi([
+const PPDC_ABI = parseAbi([
   "function approve(address spender, uint256 value) returns (bool)",
   "function allowance(address owner, address spender) view returns (uint256)",
   "function transferFrom(address from, address to, uint256 value) returns (bool)",
 ]);
+
+const PPDC = 'PPDC';
 
 const ACCOUNT_ABI = parseAbi([
   "function subscribe(address player_address, address operator, bytes annonce_public_key, bytes encrypted_profile, uint8 subscription_tier)",
@@ -40,8 +42,8 @@ function tierToContractId(tier) {
   return index + 1;
 }
 
-function tierUsdcAmount(tier) {
-  return BigInt(tier.monthlyUsd) * USDC_SCALE;
+function tierPpdcAmount(tier) {
+  return BigInt(tier.monthlyPpdc) * PPDC_SCALE;
 }
 
 function decodeAccountBlob(blob) {
@@ -240,6 +242,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
   }, [signIn]);
 
   const handleProfileChange = useCallback((field, value) => {
+    if (field === 'email' || field === 'phone' || field === 'legalName') return;
     setProfile((current) => ({
       ...current,
       [field]: value,
@@ -281,7 +284,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     setError('');
     if (!accountSession) return;
     if (!profileHasRequiredFields(profile)) {
-      setError('Display name, email, phone number, and legal name are required.');
+      setError('Display name is required.');
       return;
     }
 
@@ -308,10 +311,10 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     return playerDisplaynames[normalized] || '';
   }, [playerDisplaynames]);
 
-  const approveOperatorUsdc = useCallback(async (session, amount) => {
+  const approveOperatorPpdc = useCallback(async (session, amount) => {
     const allowance = await publicPokerClient.readContract({
-      address: USDC_CONTRACT_ADDRESS,
-      abi: USDC_ABI,
+      address: PPDC_CONTRACT_ADDRESS,
+      abi: PPDC_ABI,
       functionName: 'allowance',
       args: [session.walletAddress, session.operator],
     });
@@ -319,15 +322,15 @@ export function useAccounts({ playerAddresses = [] } = {}) {
 
     const args = [session.operator, amount];
     const overrides = await getBufferedGasOverrides(publicPokerClient, {
-      address: USDC_CONTRACT_ADDRESS,
-      abi: USDC_ABI,
+      address: PPDC_CONTRACT_ADDRESS,
+      abi: PPDC_ABI,
       functionName: 'approve',
       args,
       account: session.walletAddress,
     });
     const hash = await writeWalletContract({
-      address: USDC_CONTRACT_ADDRESS,
-      abi: USDC_ABI,
+      address: PPDC_CONTRACT_ADDRESS,
+      abi: PPDC_ABI,
       functionName: 'approve',
       args,
       ...overrides,
@@ -339,8 +342,8 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     setError('');
 
     try {
-      if (!isAddress(USDC_CONTRACT_ADDRESS)) {
-        throw new Error('USDC contract address is not configured.');
+      if (!isAddress(PPDC_CONTRACT_ADDRESS)) {
+        throw new Error(`${PPDC} contract address is not configured.`);
       }
       if (!isAddress(PRIVATE_POKER_CONTRACT_ADDRESS)) {
         throw new Error('PrivatePoker contract address is not configured.');
@@ -358,16 +361,16 @@ export function useAccounts({ playerAddresses = [] } = {}) {
       }
 
       setIsSubscribing(true);
-      const amount = tierUsdcAmount(selectedTier);
+      const amount = tierPpdcAmount(selectedTier);
       const operator = createOperatorAddress(session.operatorPrivateKey);
 
-      setSubscriptionStep('Approve USDC for Operator...');
-      await approveOperatorUsdc(session, amount);
+      setSubscriptionStep(`Approve ${PPDC} for Operator...`);
+      await approveOperatorPpdc(session, amount);
 
-      setSubscriptionStep('Operator transfers USDC into PrivatePoker...');
+      setSubscriptionStep(`Operator transfers ${PPDC} into PrivatePoker...`);
       const transferHash = await operator.writeContract({
-        contract: USDC_CONTRACT_ADDRESS,
-        abi: USDC_ABI,
+        contract: PPDC_CONTRACT_ADDRESS,
+        abi: PPDC_ABI,
         functionName: 'transferFrom',
         args: [session.walletAddress, PRIVATE_POKER_CONTRACT_ADDRESS, amount],
       });
@@ -401,7 +404,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
   }, [
     accountSession,
     address,
-    approveOperatorUsdc,
+    approveOperatorPpdc,
     createOperatorAddress,
     profileBlob,
     router,

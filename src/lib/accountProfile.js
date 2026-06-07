@@ -1,7 +1,6 @@
 import { bytesToHex, hexToBytes } from 'viem';
-import { decryptFromPeer, encryptForPeer } from '@/lib/crypto';
 
-export const ACCOUNT_PROFILE_VERSION = 1;
+export const ACCOUNT_PROFILE_VERSION = 2;
 
 export const EMPTY_ACCOUNT_PROFILE = {
   displayName: '',
@@ -11,12 +10,7 @@ export const EMPTY_ACCOUNT_PROFILE = {
 };
 
 export function profileHasRequiredFields(profile) {
-  return Boolean(
-    profile?.displayName?.trim()
-    && profile?.email?.trim()
-    && profile?.phone?.trim()
-    && profile?.legalName?.trim(),
-  );
+  return Boolean(profile?.displayName?.trim());
 }
 
 export function profileNeedsEdit(profileRecord) {
@@ -34,42 +28,22 @@ export function decodeProfileBlob(blobHex) {
   return JSON.parse(new TextDecoder().decode(hexToBytes(blobHex)));
 }
 
-export async function buildAccountProfileBlob(profile, accountSession) {
-  if (!accountSession?.operatorBlsPublicKey) {
-    throw new Error('Operator BLS public key is missing.');
-  }
-
+export async function buildAccountProfileBlob(profile) {
   const publicProfile = {
     displayName: profile.displayName.trim(),
   };
-  const sensitiveProfile = {
-    email: profile.email.trim(),
-    phone: profile.phone.trim(),
-    legalName: profile.legalName.trim(),
-  };
-  const encryptedSensitiveProfile = await encryptForPeer(
-    accountSession.operatorBlsPublicKey,
-    JSON.stringify(sensitiveProfile),
-  );
 
   return encodeProfileBlob({
     type: 'PrivatePokerAccountProfile',
     version: ACCOUNT_PROFILE_VERSION,
     publicProfile,
-    encryptedSensitiveProfile,
   });
 }
 
-export async function readAccountProfileBlob(blobHex, accountSession) {
-  if (!blobHex || !accountSession?.operatorBlsPrivateKey) return null;
+export async function readAccountProfileBlob(blobHex) {
+  if (!blobHex) return null;
 
   const blob = decodeProfileBlob(blobHex);
-  if (!blob?.encryptedSensitiveProfile) return null;
-
-  const sensitiveProfile = JSON.parse(await decryptFromPeer(
-    accountSession.operatorBlsPrivateKey,
-    blob.encryptedSensitiveProfile,
-  ));
 
   return {
     blobHex,
@@ -77,9 +51,6 @@ export async function readAccountProfileBlob(blobHex, accountSession) {
     profile: {
       ...EMPTY_ACCOUNT_PROFILE,
       displayName: blob.publicProfile?.displayName ?? '',
-      email: sensitiveProfile.email ?? '',
-      phone: sensitiveProfile.phone ?? '',
-      legalName: sensitiveProfile.legalName ?? '',
     },
   };
 }
