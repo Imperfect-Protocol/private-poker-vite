@@ -4,6 +4,7 @@ import { decryptFromPeer, encryptForPeer, normalizePeerPublicKey } from '@/lib/c
 const RTC_POOL_SIGNAL = 'RTC_POOL_SIGNAL';
 const RTC_POOL_ROUTE_REQUEST = 'RTC_POOL_ROUTE_REQUEST';
 const RTC_POOL_ROUTE_RESULT = 'RTC_POOL_ROUTE_RESULT';
+const RTC_POOL_LOCAL_NOTICE = 'RTC_POOL_LOCAL_NOTICE';
 const RTC_POOL_BROADCAST_CHANNEL = 'private-poker:rtc-session-pool';
 const DEFAULT_TTL = 6;
 const MAX_SEEN_MESSAGES = 500;
@@ -45,6 +46,13 @@ function sessionKey({ playerAddress, lobbyId, tableId, endpoint = ENDPOINT.TABLE
     normalizeAddress(playerAddress),
     String(lobbyId ?? ''),
     scopedTableId,
+  ].join(':');
+}
+
+function lobbyPresenceKey(playerAddress, lobbyId) {
+  return [
+    normalizeAddress(playerAddress),
+    String(lobbyId ?? ''),
   ].join(':');
 }
 
@@ -326,6 +334,7 @@ class RtcSessionPool {
     this.tabId = makeMessageId('tab', 'pool', '0', '0');
     this.role = 'table';
     this.sessions = new Map();
+    this.lobbyPresences = new Map();
     this.links = new Map();
     this.knownPeers = new Map();
     this.silentEndpoints = new Map();
@@ -600,6 +609,11 @@ class RtcSessionPool {
       return;
     }
 
+    if (message?.type === RTC_POOL_LOCAL_NOTICE) {
+      this.dispatchLocalLobbyNotice(message.noticeType, message.detail);
+      return;
+    }
+
     if (message?.type === 'RTC_POOL_SIGNAL_DELIVERED') {
       logPool('worker delivery ack received', { signalId: message.id });
       this.resolveDelivery(message.id);
@@ -663,6 +677,11 @@ class RtcSessionPool {
 
     if (message.type === RTC_POOL_ROUTE_RESULT) {
       this.resolveRoute(message);
+      return;
+    }
+
+    if (message.type === RTC_POOL_LOCAL_NOTICE) {
+      this.dispatchLocalLobbyNotice(message.noticeType, message.detail);
       return;
     }
 
@@ -738,6 +757,36 @@ class RtcSessionPool {
       }
     });
     this.postUnregisterSession(session);
+  }
+
+  registerLobbyPresence({ playerAddress, lobbyId }) {
+    const key = lobbyPresenceKey(playerAddress, lobbyId);
+    if (!normalizeAddress(playerAddress) || !lobbyId) return null;
+
+    this.lobbyPresences.set(key, {
+      playerAddress,
+      lobbyId: String(lobbyId),
+      seenAt: Date.now(),
+    });
+    logPool('lobby presence registered', {
+      player: formatPeer(playerAddress),
+      lobbyId,
+    });
+    return key;
+  }
+
+  unregisterLobbyPresence(keyOrPresence) {
+    const key = typeof keyOrPresence === 'string'
+      ? keyOrPresence
+      : lobbyPresenceKey(keyOrPresence?.playerAddress, keyOrPresence?.lobbyId);
+    if (!key || !this.lobbyPresences.has(key)) return;
+
+    const presence = this.lobbyPresences.get(key);
+    this.lobbyPresences.delete(key);
+    logPool('lobby presence unregistered', {
+      player: formatPeer(presence?.playerAddress),
+      lobbyId: presence?.lobbyId,
+    });
   }
 
   registerLink({ session, peerAddress, direction, channel, silent = false }) {
@@ -986,7 +1035,10 @@ class RtcSessionPool {
       reason,
       to: formatPeer(result.targetAddress),
     });
-    return this.scatter(result);
+    const sentToLinks = this.scatter(result);
+    const sentToBroadcast = this.postBroadcast(result);
+    const sentToWorker = this.postWorker(result);
+    return sentToLinks || sentToBroadcast || sentToWorker;
   }
 
   announceDelivery(messageId) {
@@ -1004,6 +1056,9 @@ class RtcSessionPool {
 
   hasLocalAddress(playerAddress, lobbyId, tableId) {
     const playerKey = normalizeAddress(playerAddress);
+    if (this.lobbyPresences.has(lobbyPresenceKey(playerAddress, lobbyId))) {
+      return true;
+    }
     return [...this.sessions.values()].some((session) => (
       normalizeAddress(session.config?.playerAddress ?? session.localSession?.playerAddress) === playerKey
       && String(session.config?.lobbyId ?? session.localSession?.lobbyId) === String(lobbyId)
@@ -1032,6 +1087,20 @@ class RtcSessionPool {
   }
 
   emitLocalLobbyNotice(type, detail) {
+    this.dispatchLocalLobbyNotice(type, detail);
+    this.postBroadcast({
+      type: RTC_POOL_LOCAL_NOTICE,
+      noticeType: type,
+      detail,
+    });
+    this.postWorker({
+      type: RTC_POOL_LOCAL_NOTICE,
+      noticeType: type,
+      detail,
+    });
+  }
+
+  dispatchLocalLobbyNotice(type, detail) {
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new CustomEvent(type, { detail }));
   }
@@ -1058,6 +1127,16 @@ class RtcSessionPool {
     });
 
     this.remember(signal.id);
+    if (this.hasLocalAddress(signal.targetAddress, signal.lobbyId, signal.tableId)) {
+      logPool('lobby route target is local', {
+        requestId: message.requestId,
+        signalId: signal.id,
+        target: formatPeer(signal.targetAddress),
+      });
+      await this.deliverOrScatter(signal);
+      return;
+    }
+
     const sent = this.scatter(signal);
     if (sent) {
       logPool('lobby route sent, waiting for remote endpoint result', {
