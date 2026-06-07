@@ -1,12 +1,6 @@
-const DEFAULT_PRIVATE_MESH_ENDPOINTS = [{
-  url: 'http://127.0.0.1:3000/resu',
-}];
+import { MESH_ENDPOINTS } from '@/lib/mesh';
 
 const cleanUrl = (value) => String(value ?? '').trim().replace(/\/+$/, '');
-
-const firstEnv = (...names) => names
-  .map((name) => process.env[name])
-  .find((candidate) => candidate != null && String(candidate).trim() !== '');
 
 const stripHexPrefix = (value) => String(value ?? '').replace(/^0x/i, '');
 
@@ -24,40 +18,16 @@ const normalizeHex = (value) => {
 const signalListeners = new Set();
 const activeSessions = new Map();
 
-function parseEndpointList(value) {
-  const text = String(value ?? '').trim();
-  if (!text) return [];
-
-  try {
-    const parsed = JSON.parse(text);
-    if (!Array.isArray(parsed)) return [];
-
-    return parsed
-      .map((entry) => {
-        if (typeof entry === 'string') return { url: cleanUrl(entry) };
-        if (entry && typeof entry === 'object') return { url: cleanUrl(entry.url) };
-        return null;
-      })
-      .filter((entry) => entry?.url);
-  } catch {
-    return [];
-  }
-}
-
 function meshEndpoints() {
-  const configured = parseEndpointList(firstEnv(
-    'NEXT_PUBLIC_PRIVATE_MESH_ENDPOINTS',
-    'PUBLIC_PRIVATE_MESH_ENDPOINTS',
-    'VITE_PRIVATE_MESH_ENDPOINTS',
-  ));
-  const endpoints = configured.length > 0 ? configured : DEFAULT_PRIVATE_MESH_ENDPOINTS;
   const seen = new Set();
 
-  return endpoints.filter(({ url }) => {
-    if (!url || seen.has(url)) return false;
-    seen.add(url);
-    return true;
-  });
+  return MESH_ENDPOINTS
+    .map((endpoint) => ({ url: cleanUrl(endpoint?.url) }))
+    .filter(({ url }) => {
+      if (!url || seen.has(url)) return false;
+      seen.add(url);
+      return true;
+    });
 }
 
 function websocketUrl(url) {
@@ -273,7 +243,7 @@ async function sendBootstrapSignal(url, signal) {
   return { url, signal, opened: false };
 }
 
-export async function publishPrivateMeshSignals(signals) {
+export async function publishPrivateMesh(signals) {
   const prepared = signals.map(createSignal);
   const results = await Promise.allSettled(meshEndpoints().flatMap((endpoint) => (
     prepared.map((signal) => sendBootstrapSignal(endpoint.url, signal))
@@ -321,7 +291,7 @@ export async function publishPrivateMeshBye({ originAddress, lobbyId, tableId } 
   }
 }
 
-export function subscribeToPrivateMeshSignals(recipient, onSignal) {
+export function subscribeToPrivateMesh(recipient, onSignal) {
   const address = normalizeAddress(recipient);
   if (!address) return () => {};
 

@@ -3,9 +3,9 @@ import { useConnection } from 'wagmi';
 import {
   getPrivateMeshUrls,
   publishPrivateMeshBye,
-  publishPrivateMeshSignals,
-  subscribeToPrivateMeshSignals,
-} from '@/lib/privateMeshSignal';
+  publishPrivateMesh,
+  subscribeToPrivateMesh,
+} from '@/lib/privateMesh';
 
 const normalizeAddress = (value) => value?.toLowerCase() ?? '';
 
@@ -66,7 +66,7 @@ export function usePrivatePokerSignal({ playerAddress } = {}) {
 
     setIsSendingSignal(true);
     try {
-      return await publishPrivateMeshSignals(signals);
+      return await publishPrivateMesh(signals);
     } finally {
       setIsSendingSignal(false);
     }
@@ -89,7 +89,7 @@ export function useListenForSignals(myPlayerAddress, lobbyId, tableId, onSignalR
     let stopped = false;
     const address = normalizeAddress(myPlayerAddress);
 
-    const handleMeshSignal = (message) => {
+    const handleMesh = (message) => {
       if (stopped || !message?.payload) return;
       const logId = message.id ?? `${message.sent_at}:${message.payload}`;
       if (seenSignalsRef.current.has(logId)) return;
@@ -118,7 +118,7 @@ export function useListenForSignals(myPlayerAddress, lobbyId, tableId, onSignalR
       });
     };
 
-    const unsubscribe = subscribeToPrivateMeshSignals(address, handleMeshSignal);
+    const unsubscribe = subscribeToPrivateMesh(address, handleMesh);
 
     console.log('[RTC signal] Private Mesh ready', {
       signalServers: getPrivateMeshUrls().length,
