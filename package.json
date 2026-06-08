@@ -5,12 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && vite build --ssr server/standalone-entry.js --outDir dist/server --emptyOutDir false",
     "lint": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
     "@noble/bls12-381": "^1.4.0",
+    "@noble/curves": "^1.9.1",
+    "@noble/hashes": "^1.8.0",
     "@reown/appkit": "^1.8.19",
     "@reown/appkit-adapter-wagmi": "^1.8.19",
     "@tailwindcss/vite": "^4.2.2",
@@ -38,6 +40,6 @@
     "postcss": "^8.5.8",
     "tailwindcss": "^4.2.2",
     "vite": "^8.0.1",
-    "vite-plugin-singlefile": "^2.3.2"
+    "vite-plugin-standalone": "^2.0.0-alpha.5"
   }
 }

@@ -1,8 +1,14 @@
-import { usePublicClient, useWriteContract, useWatchContractEvent } from 'wagmi';
+import { useEffect, useRef } from 'react';
+import { useConnection, useWriteContract } from 'wagmi';
 import { decodeAbiParameters, parseAbi } from 'viem';
-import { LOBBY_CONTRACT_ADDRESS, CHAIN_POLLING_INTERVAL } from '@/lib/chain';
+import { LOBBY_CONTRACT_ADDRESS } from '@/lib/chain';
+import { fromChipUnits } from '@/lib/constants';
+import { getBufferedGasOverrides } from '@/lib/gas';
+import { publicPokerClient } from '@/lib/publicPokerClient';
+import { useOperatorAddress } from '@/hooks/useOperatorAddress';
+import { usePublicContractEvent } from '@/hooks/usePublicContractEvent';
 
-const LOBBY_ABI = parseAbi([
+export const LOBBY_ABI = parseAbi([
     // Reads
     "function getLobbyCount() view returns (uint256)",
     "function getLobbyAt(uint256 index) view returns (bytes)",
@@ -14,8 +20,8 @@ const LOBBY_ABI = parseAbi([
 
     // Writes
     "function addLobby(uint256 id, uint256 gameType, uint256 flags, string name)",
-    "function createTable(uint256 lobby_id, uint256 table_id, string calldata name, uint256 buy_in, bytes calldata annonce_public_key)",
-    "function joinTable(uint256 lobby_id, uint256 table_id, bytes calldata annonce_public_key)",
+    "function createTable(uint256 lobby_id, uint256 table_id, string calldata name, uint256 buy_in, uint256 num_players, address player_address, address operator, bytes calldata annonce_public_key)",
+    "function joinTable(uint256 lobby_id, uint256 table_id, address player_address, address operator, bytes calldata annonce_public_key)",
     "function removeLobby(uint256 id)",
     "function removeTable(uint256 lobbyId, uint256 tableId)",
 
@@ -24,9 +30,44 @@ const LOBBY_ABI = parseAbi([
     "event TableCreated(uint256 id, uint256 lobby_id, string name, uint256 buy_in)"
 ]);
 
-export function usePrivatePokerLobby() {
-    const publicClient = usePublicClient();
+export function usePrivatePokerLobby({ onOperatorTopUp } = {}) {
+    const { address } = useConnection();
     const { mutateAsync } = useWriteContract();
+    const { writeContractFromOperator } = useOperatorAddress({ onOperatorTopUp });
+
+    const getWriteOverrides = async ({ functionName, args }) => {
+        if (!address) return {};
+
+        return getBufferedGasOverrides(publicPokerClient, {
+            address: LOBBY_CONTRACT_ADDRESS,
+            abi: LOBBY_ABI,
+            functionName,
+            args,
+            account: address,
+        });
+    };
+
+    const writeLobbyContract = async ({ functionName, args, operatorPrivateKey }) => {
+        if (operatorPrivateKey) {
+            return writeContractFromOperator({
+                operatorPrivateKey,
+                contract: LOBBY_CONTRACT_ADDRESS,
+                abi: LOBBY_ABI,
+                functionName,
+                args,
+            });
+        }
+
+        const overrides = await getWriteOverrides({ functionName, args });
+
+        return await mutateAsync({
+            address: LOBBY_CONTRACT_ADDRESS,
+            abi: LOBBY_ABI,
+            functionName,
+            args,
+            ...overrides,
+        });
+    };
 
     // --- DECODERS ---
 
@@ -77,9 +118,9 @@ export function usePrivatePokerLobby() {
         return {
             id: table.tableId.toString(),
             flags: Number(table.tableFlags),
-            buyIn: table.tableBuyin.toString(),
+            buyIn: fromChipUnits(table.tableBuyin),
             playerCount: Number(table.tablePlayerCount),
-            totalBuyIn: table.tableTotalBuyin.toString(),
+            totalBuyIn: fromChipUnits(table.tableTotalBuyin),
             name: table.tableName,
         };
     };
@@ -87,7 +128,7 @@ export function usePrivatePokerLobby() {
     // --- READ OPERATIONS ---
 
     const getLobbyCount = async () => {
-        const count = await publicClient.readContract({
+        const count = await publicPokerClient.readContract({
             address: LOBBY_CONTRACT_ADDRESS,
             abi: LOBBY_ABI,
             functionName: 'getLobbyCount',
@@ -96,7 +137,7 @@ export function usePrivatePokerLobby() {
     };
 
     const getLobbyAt = async (index) => {
-        const blob = await publicClient.readContract({
+        const blob = await publicPokerClient.readContract({
             address: LOBBY_CONTRACT_ADDRESS,
             abi: LOBBY_ABI,
             functionName: 'getLobbyAt',
@@ -106,7 +147,7 @@ export function usePrivatePokerLobby() {
     };
 
     const getLobbyById = async (lobbyId) => {
-        const blob = await publicClient.readContract({
+        const blob = await publicPokerClient.readContract({
             address: LOBBY_CONTRACT_ADDRESS,
             abi: LOBBY_ABI,
             functionName: 'getLobbyById',
@@ -116,7 +157,7 @@ export function usePrivatePokerLobby() {
     };
 
     const getTableCount = async (lobbyId) => {
-        const count = await publicClient.readContract({
+        const count = await publicPokerClient.readContract({
             address: LOBBY_CONTRACT_ADDRESS,
             abi: LOBBY_ABI,
             functionName: 'getTableCount',
@@ -126,7 +167,7 @@ export function usePrivatePokerLobby() {
     };
 
     const getTablesRange = async (lobbyId, offset, count) => {
-        const blobs = await publicClient.readContract({
+        const blobs = await publicPokerClient.readContract({
             address: LOBBY_CONTRACT_ADDRESS,
             abi: LOBBY_ABI,
             functionName: 'getTablesRange',
@@ -136,56 +177,66 @@ export function usePrivatePokerLobby() {
     };
 
     const getTableDetail = async (lobbyId, tableId) => {
-        const blob = await publicClient.readContract({
+        const blob = await publicPokerClient.readContract({
             address: LOBBY_CONTRACT_ADDRESS,
             abi: LOBBY_ABI,
             functionName: 'getTableDetail',
             args: [BigInt(lobbyId), BigInt(tableId)],
         });
 
-        const [detail] = decodeAbiParameters(
-            [
-                {
-                    type: 'tuple',
-                    components: [
-                        {
-                            name: 'info',
-                            type: 'tuple',
-                            components: [
-                                { name: 'tableId', type: 'uint256' },
-                                { name: 'tableFlags', type: 'uint256' },
-                                { name: 'tableBuyin', type: 'uint256' },
-                                { name: 'tablePlayerCount', type: 'uint256' },
-                                { name: 'tableTotalBuyin', type: 'uint256' },
-                                { name: 'tableName', type: 'string' }
-                            ]
-                        },
-                        {
-                            name: 'players',
-                            type: 'tuple[]',
-                            components: [
-                                { name: 'playerAddress', type: 'address' },
-                                { name: 'playerChips', type: 'uint256' }
-                            ]
-                        }
-                    ]
-                }
-            ],
-            blob
-        );
+        const tableDetailShape = (includeAnnoncePublicKey) => [
+            {
+                type: 'tuple',
+                components: [
+                    {
+                        name: 'info',
+                        type: 'tuple',
+                        components: [
+                            { name: 'tableId', type: 'uint256' },
+                            { name: 'tableFlags', type: 'uint256' },
+                            { name: 'tableBuyin', type: 'uint256' },
+                            { name: 'tablePlayerCount', type: 'uint256' },
+                            { name: 'tableTotalBuyin', type: 'uint256' },
+                            { name: 'tableName', type: 'string' }
+                        ]
+                    },
+                    {
+                        name: 'players',
+                        type: 'tuple[]',
+                        components: [
+                            { name: 'playerAddress', type: 'address' },
+                            { name: 'operator', type: 'address' },
+                            { name: 'playerChips', type: 'uint256' },
+                            ...(includeAnnoncePublicKey
+                                ? [{ name: 'playerAnnoncePublicKey', type: 'bytes' }]
+                                : [])
+                        ]
+                    }
+                ]
+            }
+        ];
+
+        let detail;
+        try {
+            [detail] = decodeAbiParameters(tableDetailShape(true), blob);
+        } catch {
+            [detail] = decodeAbiParameters(tableDetailShape(false), blob);
+        }
 
         return {
             info: {
                 id: detail.info.tableId.toString(),
                 flags: Number(detail.info.tableFlags),
-                buyIn: detail.info.tableBuyin.toString(),
+                buyIn: fromChipUnits(detail.info.tableBuyin),
                 playerCount: Number(detail.info.tablePlayerCount),
-                totalBuyIn: detail.info.tableTotalBuyin.toString(),
+                totalBuyIn: fromChipUnits(detail.info.tableTotalBuyin),
                 name: detail.info.tableName,
             },
             players: detail.players.map(p => ({
-                address: p.playerAddress,
-                chips: p.playerChips.toString()
+                playerAddress: p.playerAddress,
+                operator: p.operator,
+                chips: fromChipUnits(p.playerChips),
+                annoncePublicKey: p.playerAnnoncePublicKey ?? null,
             }))
         };
     };
@@ -193,7 +244,7 @@ export function usePrivatePokerLobby() {
     const getPlayerTables = async (playerAddress) => {
         if (!playerAddress) return [];
 
-        const tableIds = await publicClient.readContract({
+        const tableIds = await publicPokerClient.readContract({
             address: LOBBY_CONTRACT_ADDRESS,
             abi: LOBBY_ABI,
             functionName: 'getPlayerTables',
@@ -207,46 +258,37 @@ export function usePrivatePokerLobby() {
     // --- WRITE OPERATIONS ---
 
     const addLobby = async (id, gameType, flags, name) => {
-        return await mutateAsync({
-            address: LOBBY_CONTRACT_ADDRESS,
-            abi: LOBBY_ABI,
+        return await writeLobbyContract({
             functionName: 'addLobby',
             args: [BigInt(id), BigInt(gameType), BigInt(flags), name],
         });
     };
 
-    const createTable = async (lobbyId, tableId, name, buyIn, publicKeyBytes) => {
-        console.log("createTable()", lobbyId, tableId, name, buyIn, publicKeyBytes);
-        return await mutateAsync({
-            address: LOBBY_CONTRACT_ADDRESS,
-            abi: LOBBY_ABI,
+    const createTable = async (lobbyId, tableId, name, buyIn, numPlayers, playerAddress, operator, publicKeyBytes = '0x', operatorPrivateKey = undefined) => {
+        return await writeLobbyContract({
             functionName: 'createTable',
-            args: [BigInt(lobbyId), BigInt(tableId), name, BigInt(buyIn), publicKeyBytes],
+            args: [BigInt(lobbyId), BigInt(tableId), name, BigInt(buyIn), BigInt(numPlayers), playerAddress, operator, publicKeyBytes],
+            operatorPrivateKey,
         });
     };
 
-    const joinTable = async (lobbyId, tableId, buyIn, publicKeyBytes) => {
-        return await mutateAsync({
-            address: LOBBY_CONTRACT_ADDRESS,
-            abi: LOBBY_ABI,
+    const joinTable = async (lobbyId, tableId, buyIn, playerAddress, operator, publicKeyBytes = '0x', operatorPrivateKey = undefined) => {
+        return await writeLobbyContract({
             functionName: 'joinTable',
-            args: [BigInt(lobbyId), BigInt(tableId), publicKeyBytes],
+            args: [BigInt(lobbyId), BigInt(tableId), playerAddress, operator, publicKeyBytes],
+            operatorPrivateKey,
         });
     };
 
     const removeLobby = async (id) => {
-        return await mutateAsync({
-            address: LOBBY_CONTRACT_ADDRESS,
-            abi: LOBBY_ABI,
+        return await writeLobbyContract({
             functionName: 'removeLobby',
             args: [BigInt(id)],
         });
     };
 
     const removeTable = async (lobbyId, tableId) => {
-        return await mutateAsync({
-            address: LOBBY_CONTRACT_ADDRESS,
-            abi: LOBBY_ABI,
+        return await writeLobbyContract({
             functionName: 'removeTable',
             args: [BigInt(lobbyId), BigInt(tableId)],
         });
@@ -262,28 +304,38 @@ export function usePrivatePokerLobby() {
 // -- LISTEN TO EVENTS --
 
 export function useListenForNewLobbies(onLobbyCreated) {
-    useWatchContractEvent({
+    const onLobbyCreatedRef = useRef(onLobbyCreated);
+
+    useEffect(() => {
+        onLobbyCreatedRef.current = onLobbyCreated;
+    }, [onLobbyCreated]);
+
+    usePublicContractEvent({
         address: LOBBY_CONTRACT_ADDRESS,
         abi: LOBBY_ABI,
         eventName: 'LobbyCreated',
-        pollingInterval: CHAIN_POLLING_INTERVAL,
         onLogs: (logs) => {
             logs.forEach(log => {
-                onLobbyCreated(log.args);
+                onLobbyCreatedRef.current?.(log.args);
             });
         },
     });
 }
 
 export function useListenForNewTables(onTableCreated) {
-    useWatchContractEvent({
+    const onTableCreatedRef = useRef(onTableCreated);
+
+    useEffect(() => {
+        onTableCreatedRef.current = onTableCreated;
+    }, [onTableCreated]);
+
+    usePublicContractEvent({
         address: LOBBY_CONTRACT_ADDRESS,
         abi: LOBBY_ABI,
         eventName: 'TableCreated',
-        pollingInterval: CHAIN_POLLING_INTERVAL,
         onLogs: (logs) => {
             logs.forEach(log => {
-                onTableCreated(log.args);
+                onTableCreatedRef.current?.(log.args);
             });
         },
     });

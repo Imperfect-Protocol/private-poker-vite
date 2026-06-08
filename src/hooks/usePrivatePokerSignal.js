@@ -1,49 +1,133 @@
-import { useWriteContract, useWatchContractEvent } from 'wagmi';
-import { parseAbi } from 'viem';
-import { SIGNAL_CONTRACT_ADDRESS, CHAIN_POLLING_INTERVAL } from '@/lib/chain';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useConnection } from 'wagmi';
+import {
+  getPrivateMeshUrl,
+  pollPrivateMeshSignals,
+  publishPrivateMeshSignals,
+  subscribeToPrivateMeshSignals,
+} from '@/lib/privateMeshSignal';
 
-const SIGNAL_ABI = parseAbi([
-    "function send_signal(uint256 lobby_id, uint256 table_id, address recipient, bytes encrypted_data)",
-    "event HandshakeSignal(address sender, uint256 lobby_id, uint256 table_id, address recipient, bytes encrypted_data)"
-]);
+const normalizeAddress = (value) => value?.toLowerCase() ?? '';
 
-export function usePrivatePokerSignal() {
-    const { mutateAsync, isPending } = useWriteContract();
+const formatPeer = (value) => {
+  const text = value ? String(value) : '';
+  if (!text) return 'unknown';
+  return text.length <= 12 ? text : `${text.slice(0, 6)}...${text.slice(-4)}`;
+};
 
-    // 1. The "Knock" - Send the encrypted WebRTC offer/answer on-chain
-    const sendSignal = async (lobbyId, tableId, recipientAddress, encryptedDataBytes) => {
-        return await mutateAsync({
-            address: SIGNAL_CONTRACT_ADDRESS,
-            abi: SIGNAL_ABI,
-            functionName: 'send_signal',
-            args: [BigInt(lobbyId), BigInt(tableId), recipientAddress, encryptedDataBytes],
-        });
-    };
-
-    return { sendSignal, isSendingSignal: isPending };
+function asArray(value) {
+  return Array.isArray(value) ? value : [value];
 }
 
-// 2. The "Listen" - Automatically triggers when someone knocks on your door
-export function useListenForSignals(myWalletAddress, onSignalReceived) {
-    useWatchContractEvent({
-        address: SIGNAL_CONTRACT_ADDRESS,
-        abi: SIGNAL_ABI,
-        eventName: 'HandshakeSignal',
-        pollingInterval: CHAIN_POLLING_INTERVAL,
-        onLogs: (logs) => {
-            logs.forEach(log => {
-                const { sender, lobby_id, table_id, recipient, encrypted_data } = log.args;
-                
-                // Only process the signal if it is addressed to the connected wallet
-                if (recipient?.toLowerCase() === myWalletAddress?.toLowerCase()) {
-                    onSignalReceived({
-                        sender,
-                        lobbyId: lobby_id.toString(),
-                        tableId: table_id.toString(),
-                        encryptedData: encrypted_data
-                    });
-                }
-            });
-        },
+export function usePrivatePokerSignal({ playerAddress } = {}) {
+  const { address } = useConnection();
+  const senderAddress = playerAddress ?? address;
+  const [isSendingSignal, setIsSendingSignal] = useState(false);
+
+  const sendSignal = useCallback(async (lobbyId, tableId, recipientAddresses, encryptedDataBytes) => {
+    if (!senderAddress) {
+      throw new Error('Player address is required before publishing a Private Mesh signal.');
+    }
+
+    const recipients = asArray(recipientAddresses);
+    const encryptedData = asArray(encryptedDataBytes);
+
+    if (recipients.length !== encryptedData.length) {
+      throw new Error('Signal recipient and payload counts must match.');
+    }
+
+    const signals = recipients.map((recipient, index) => ({
+      recipient,
+      encryptedData: encryptedData[index],
+    }));
+
+    console.log('[RTC signal] Private Mesh publish', {
+      meshUrl: getPrivateMeshUrl(),
+      lobbyId: lobbyId?.toString?.() ?? String(lobbyId),
+      tableId: tableId?.toString?.() ?? String(tableId),
+      recipients: recipients.map(formatPeer),
+      payloads: encryptedData.length,
     });
+
+    setIsSendingSignal(true);
+    try {
+      return await publishPrivateMeshSignals(signals);
+    } finally {
+      setIsSendingSignal(false);
+    }
+  }, [senderAddress]);
+
+  return { sendSignal, isSendingSignal };
+}
+
+export function useListenForSignals(myPlayerAddress, lobbyId, tableId, onSignalReceived) {
+  const onSignalReceivedRef = useRef(onSignalReceived);
+  const seenSignalsRef = useRef(new Set());
+
+  useEffect(() => {
+    onSignalReceivedRef.current = onSignalReceived;
+  }, [onSignalReceived]);
+
+  useEffect(() => {
+    if (!myPlayerAddress || !lobbyId || !tableId) return undefined;
+
+    let stopped = false;
+    const address = normalizeAddress(myPlayerAddress);
+
+    const handleMeshSignal = (message) => {
+      if (stopped || !message?.payload) return;
+      const logId = message.id ?? `${message.sent_at}:${message.payload}`;
+      if (seenSignalsRef.current.has(logId)) return;
+      seenSignalsRef.current.add(logId);
+      if (seenSignalsRef.current.size > 500) {
+        const [oldestSignalId] = seenSignalsRef.current;
+        seenSignalsRef.current.delete(oldestSignalId);
+      }
+
+      console.log('[RTC signal] Private Mesh signal received', {
+        signalId: logId,
+        recipient: formatPeer(message.recipient),
+        bytes: Math.max(0, (String(message.signal ?? '').length - 2) / 2),
+      });
+
+      Promise.resolve(onSignalReceivedRef.current?.({
+        sender: null,
+        lobbyId: lobbyId.toString(),
+        tableId: tableId.toString(),
+        recipients: [address],
+        encryptedData: message.payload,
+        logId,
+        isRecipient: true,
+      })).catch((error) => {
+        console.log('[RTC debug] Private Mesh signal callback failed', error);
+      });
+    };
+
+    const unsubscribe = subscribeToPrivateMeshSignals(address, handleMeshSignal);
+    const pollController = new AbortController();
+    const poll = async () => {
+      try {
+        const messages = await pollPrivateMeshSignals(address, { signal: pollController.signal });
+        messages.forEach(handleMeshSignal);
+      } catch (error) {
+        if (!stopped && error?.name !== 'AbortError') {
+          console.log('[RTC signal] Private Mesh poll failed', error);
+        }
+      }
+    };
+    const pollTimer = setInterval(poll, 1000);
+    poll();
+
+    console.log('[RTC signal] Private Mesh ready', {
+      meshUrl: getPrivateMeshUrl(),
+      recipient: formatPeer(address),
+    });
+
+    return () => {
+      stopped = true;
+      unsubscribe?.();
+      pollController.abort();
+      clearInterval(pollTimer);
+    };
+  }, [lobbyId, myPlayerAddress, tableId]);
 }
