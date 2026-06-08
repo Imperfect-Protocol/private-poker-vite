@@ -263,6 +263,24 @@ export function useNetwork({
     session,
   ]);
 
+  const pokeInboundConnection = useCallback(async (peerPlayerAddress, peerAnnouncePubKey, callback) => {
+    console.log('[RTC signal] Poke immediate start', {
+      peer: peerPlayerAddress,
+      lobbyId,
+      tableId,
+    });
+    await session.pokeInboundConnection(peerPlayerAddress, peerAnnouncePubKey, callback);
+    console.log('[RTC signal] Poke immediate done', {
+      peer: peerPlayerAddress,
+      lobbyId,
+      tableId,
+    });
+  }, [
+    lobbyId,
+    session,
+    tableId,
+  ]);
+
   const prepareNetworkSession = useCallback(async () => {
     return controlActions.enqueueAction(
       'BLS key generation',
@@ -288,5 +306,6 @@ export function useNetwork({
     armDropNextMessage,
     armDuplicateNextMessage,
     prepareHandSession,
+    pokeInboundConnection,
   ];
 }

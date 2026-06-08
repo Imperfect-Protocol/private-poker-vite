@@ -16,9 +16,7 @@ export default function MainLobby() {
         </div>
 
         {isLoading ? (
-          <div className="w-full text-center py-16 text-teal-600/50 font-mono text-xs uppercase tracking-widest border border-dashed border-teal-500/20 rounded-xl bg-slate-900/30">
-            Syncing with Arbitrum Stylus...
-          </div>
+          <div/>
         ) : lobbies.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {lobbies.map((lobby) => (

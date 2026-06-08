@@ -4,14 +4,16 @@ import { useState, useEffect } from 'react'
 import { useAppKitAccount, useAppKit } from '@reown/appkit/react'
 import { useDisconnect, useConnection } from 'wagmi'
 import { formatUnits, isAddress, parseAbi } from 'viem';
-import { CHIPS_CONTRACT_ADDRESS, USDC_CONTRACT_ADDRESS } from '@/lib/chain';
+import { CHIPS_CONTRACT_ADDRESS, PPDC_CONTRACT_ADDRESS } from '@/lib/chain';
 import { publicPokerClient } from '@/lib/publicPokerClient';
+
+const PPDC = 'PPDC';
 
 const CHIPS_ABI = parseAbi([
   "function balanceOf(address account) view returns (uint256)",
 ]);
 
-function formatUsdcBalance(balance) {
+function formatPpdcBalance(balance) {
   return Number(formatUnits(balance, 6)).toFixed(2);
 }
 
@@ -22,7 +24,7 @@ function formatChipsBalance(balance) {
 export default function WalletAuth() {
   const [mounted, setMounted] = useState(false)
   const [chipsBalance, setChipsBalance] = useState(null)
-  const [usdcBalance, setUsdcBalance] = useState(null)
+  const [ppdcBalance, setPpdcBalance] = useState(null)
   const { open } = useAppKit()
   const { disconnect } = useDisconnect()
   const { isConnected } = useAppKitAccount()
@@ -39,12 +41,12 @@ export default function WalletAuth() {
     const loadTokenBalances = async () => {
       if (!address) {
         setChipsBalance(null);
-        setUsdcBalance(null);
+        setPpdcBalance(null);
         return;
       }
 
       try {
-        const [chips, usdc] = await Promise.all([
+        const [chips, ppdc] = await Promise.all([
           isAddress(CHIPS_CONTRACT_ADDRESS)
             ? publicPokerClient.readContract({
               address: CHIPS_CONTRACT_ADDRESS,
@@ -53,9 +55,9 @@ export default function WalletAuth() {
               args: [address],
             })
             : Promise.resolve(null),
-          isAddress(USDC_CONTRACT_ADDRESS)
+          isAddress(PPDC_CONTRACT_ADDRESS)
             ? publicPokerClient.readContract({
-              address: USDC_CONTRACT_ADDRESS,
+              address: PPDC_CONTRACT_ADDRESS,
               abi: CHIPS_ABI,
               functionName: 'balanceOf',
               args: [address],
@@ -64,13 +66,13 @@ export default function WalletAuth() {
         ]);
         if (!cancelled) {
           setChipsBalance(chips);
-          setUsdcBalance(usdc);
+          setPpdcBalance(ppdc);
         }
       } catch (error) {
         if (!cancelled) {
           console.error('Failed to load token balances:', error);
           setChipsBalance(null);
-          setUsdcBalance(null);
+          setPpdcBalance(null);
         }
       }
     };
@@ -92,7 +94,7 @@ export default function WalletAuth() {
       <div className="flex items-center bg-slate-900 border border-teal-500/20 rounded px-1 py-1">
         <div className="flex items-center gap-3 px-3 py-1 font-mono font-bold text-[0.8em]">
           <span className="text-cyan-300">
-            {usdcBalance === null ? '... USDC' : `${formatUsdcBalance(usdcBalance)} USDC`}
+            {ppdcBalance === null ? `... ${PPDC}` : `${formatPpdcBalance(ppdcBalance)} ${PPDC}`}
           </span>
           <span className="text-slate-700">|</span>
           <span className="text-teal-400">

@@ -230,6 +230,16 @@ self.onconnect = (event) => {
       return;
     }
 
+    if (message?.type === 'RTC_POOL_LOCAL_NOTICE') {
+      broadcast({
+        type: 'RTC_POOL_LOCAL_NOTICE',
+        noticeType: message.noticeType,
+        detail: message.detail,
+        fromSharedWorker: true,
+      }, portId);
+      return;
+    }
+
     if (message?.type === 'RTC_POOL_SIGNAL_DELIVERED') {
       broadcast({
         type: 'RTC_POOL_SIGNAL_DELIVERED',

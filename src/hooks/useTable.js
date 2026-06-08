@@ -101,6 +101,7 @@ export function useTable({
     armDropNextMessage,
     armDuplicateNextMessage,
     prepareHandSession,
+    pokeInboundConnection,
   ] = network;
   const mySeatNo = useMemo(() => (
     seats.find((seat) => normalizeAddress(seat.playerAddress) === normalizeAddress(playerAddress))?.seatNo ?? null
@@ -140,9 +141,35 @@ export function useTable({
     }, { immediateOffer });
   }, [onSeat, previousSeat, subscribeTo]);
 
-  const retryInboundConnection = useCallback(() => (
-    subscribeToPreviousSeat({ immediateOffer: true })
-  ), [subscribeToPreviousSeat]);
+  const retryInboundConnection = useCallback(async () => {
+    if (!previousSeat?.playerAddress) {
+      console.log('[RTC UI] Poke ignored: no previous seat');
+      throw new Error('No previous peer seat is available to poke.');
+    }
+
+    const { playerAddress: peerPlayerAddress, announcePublicKey } = previousSeat;
+    if (!announcePublicKey) {
+      console.log('[RTC UI] Poke ignored: previous seat has no announce key', {
+        peer: peerPlayerAddress,
+        lobbyId,
+        tableId: activeTableId,
+      });
+      throw new Error('Previous peer is missing an announce key.');
+    }
+
+    console.log('[RTC UI] Poke inbound', {
+      peer: peerPlayerAddress,
+      lobbyId,
+      tableId: activeTableId,
+    });
+    await pokeInboundConnection(peerPlayerAddress, announcePublicKey, (seatNo, event) => {
+      onSeat(seatNo, {
+        kind: 'network',
+        playerAddress: peerPlayerAddress,
+        event,
+      });
+    });
+  }, [activeTableId, lobbyId, onSeat, pokeInboundConnection, previousSeat]);
 
   useEffect(() => {
     if (!networkEnabled) return;

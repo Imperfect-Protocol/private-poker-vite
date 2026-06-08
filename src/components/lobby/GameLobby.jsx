@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from 'react';
+import { useAccountSession } from '@/contexts/AccountSessionContext.jsx';
 import { useRtcSessionPool } from '@/hooks/useRtcSessionPool';
 
 const formatSeat = (value) => (value ? value.slice(2, 4).toUpperCase() : '??');
@@ -64,9 +65,21 @@ const TableRow = ({ table, highlight = false, isJoined= false }) => {
 };
 
 export default function GameLobby({ tables = [], lobbyId, userTables = [] }) {
-  useRtcSessionPool({ role: 'lobby' });
+  const rtcSessionPool = useRtcSessionPool({ role: 'lobby' });
+  const { accountSession } = useAccountSession();
   const [searchQuery, setSearchQuery] = useState('');
   const [waitingPeer, setWaitingPeer] = useState(null);
+
+  useEffect(() => {
+    if (!accountSession?.walletAddress || !lobbyId) return undefined;
+    const presenceKey = rtcSessionPool.registerLobbyPresence({
+      playerAddress: accountSession.walletAddress,
+      lobbyId,
+    });
+    return () => {
+      rtcSessionPool.unregisterLobbyPresence(presenceKey);
+    };
+  }, [accountSession?.walletAddress, lobbyId, rtcSessionPool]);
 
   useEffect(() => {
     const handleWaitingPeer = (event) => {

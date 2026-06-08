@@ -26,7 +26,7 @@ export const SUBSCRIPTION_TIERS = [
     {
         id: "starter",
         name: "Starter",
-        monthlyUsd: 10,
+        monthlyPpdc: 10,
         chips: 1_000,
         accent: "teal",
         description: "Casual tables, quiet bankroll, easy entry.",
@@ -34,7 +34,7 @@ export const SUBSCRIPTION_TIERS = [
     {
         id: "regular",
         name: "Regular",
-        monthlyUsd: 50,
+        monthlyPpdc: 50,
         chips: 10_000,
         accent: "cyan",
         description: "Room for deeper games and regular sessions.",
@@ -42,7 +42,7 @@ export const SUBSCRIPTION_TIERS = [
     {
         id: "professional",
         name: "Professional",
-        monthlyUsd: 200,
+        monthlyPpdc: 200,
         chips: 100_000,
         accent: "amber",
         description: "Serious stacks for high-volume play.",

@@ -308,9 +308,7 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
   if (table.isLoading || !table.tableData) {
     return (
       <main className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="text-teal-600/50 font-mono text-xs uppercase tracking-widest border border-dashed border-teal-500/20 rounded-xl p-8 bg-slate-900/30">
-          Syncing Table Details from Arbitrum...
-        </div>
+        <div/>
       </main>
     );
   }
