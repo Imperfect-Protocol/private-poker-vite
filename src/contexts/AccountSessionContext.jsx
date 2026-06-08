@@ -19,6 +19,7 @@ export function AccountSessionProvider({ children }) {
   const { open } = useAppKit();
   const { mutateAsync: signTypedDataAsync, isPending } = useSignTypedData();
   const [accountSession, setAccountSession] = useState(null);
+  const [isRestoringSession, setIsRestoringSession] = useState(true);
   const accountSessionRef = useRef(null);
   const channelRef = useRef(null);
   const pendingRequestsRef = useRef(new Map());
@@ -62,6 +63,7 @@ export function AccountSessionProvider({ children }) {
 
         accountSessionRef.current = session;
         setAccountSession(session);
+        setIsRestoringSession(false);
       }
     };
 
@@ -104,8 +106,20 @@ export function AccountSessionProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    if (accountSession) return;
-    requestSessionFromTabs();
+    if (accountSession) {
+      setIsRestoringSession(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setIsRestoringSession(true);
+    requestSessionFromTabs().finally(() => {
+      if (!cancelled) setIsRestoringSession(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [accountSession, requestSessionFromTabs]);
 
   const signIn = useCallback(async () => {
@@ -135,6 +149,7 @@ export function AccountSessionProvider({ children }) {
     <AccountSessionContext.Provider value={{
       accountSession,
       isSigningIn: isPending,
+      isRestoringSession,
       isWalletConnected: isConnected,
       requestSessionFromTabs,
       requireSession,

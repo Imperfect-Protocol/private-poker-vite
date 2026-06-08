@@ -24,9 +24,7 @@ export default function LobbyClient({ id }) {
         </div>
 
         {isLoading ? (
-          <div className="w-full text-center py-16 text-teal-600/50 font-mono text-xs uppercase tracking-widest border border-dashed border-teal-500/20 rounded-xl bg-slate-900/30">
-            Syncing Tables with Arbitrum Stylus...
-          </div>
+          <div/>
         ) : (
           <GameLobby
             tables={tables}

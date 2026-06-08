@@ -120,17 +120,8 @@ export default function AccountSignin() {
           </div>
         </section>
 
-        <section className="rounded border border-teal-500/15 bg-slate-900/70 p-6 md:p-8">
-          {isCheckingAccount ? (
-            <div className="py-16 text-center">
-              <h2 className="text-2xl font-black uppercase tracking-tight text-white">
-                Checking Account
-              </h2>
-              <p className="mt-3 text-sm leading-6 text-slate-400">
-                Looking up your PrivatePoker subscription on chain.
-              </p>
-            </div>
-          ) : step === 'signin' ? (
+        {!isCheckingAccount && (<section className="rounded border border-teal-500/15 bg-slate-900/70 p-6 md:p-8">
+          {step === 'signin' ? (
             <div>
               <div className="flex items-start justify-between gap-4 border-b border-slate-800 pb-6">
                 <div>
@@ -304,7 +295,7 @@ export default function AccountSignin() {
               )}
             </div>
           )}
-        </section>
+        </section>)}
       </div>
     </main>
   );

@@ -50,3 +50,12 @@
     transform: translate(-50%, -105%) scale(1);
   }
 }
+
+@keyframes membership-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
