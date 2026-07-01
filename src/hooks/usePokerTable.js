@@ -30,6 +30,7 @@ import {
   communityCardConsoleLines,
 } from '@/lib/crum_pkr';
 import { holdemShowdown } from '@/lib/crum_pkr/hand_evaluator';
+import { useVerifyShuffle } from '@/hooks/useVerifyShuffle';
 
 const HISTORY_MESSAGE = 'History';
 const CHAT_MESSAGE = 'ChatMessage';
@@ -890,6 +891,7 @@ export function usePokerTable({
   publishMessage,
   prepareNetworkSession,
   prepareHandSession,
+  onOperatorTopUp,
 } = {}) {
   const [snapshot, setSnapshot] = useState({
     started: false,
@@ -933,6 +935,7 @@ export function usePokerTable({
   const previousConnectedRef = useRef(false);
   const pendingHistorySyncRef = useRef(false);
   const protocolActionInFlightRef = useRef(null);
+  const onChainPublicKeyInFlightRef = useRef(new Set());
   const debugCheatsRef = useRef({
     badPk: false,
     badShuffle: false,
@@ -940,8 +943,10 @@ export function usePokerTable({
   });
   const tableSeats = useMemo(() => table?.seats ?? [], [table?.seats]);
   const tableId = table?.tableData?.id;
+  const lobbyId = table?.lobbyId;
   const tableMaxSeats = table?.tableData?.maxSeats;
   const currentSeatNo = table?.currentSeat?.seatNo;
+  const { submitPublicKeyVerification } = useVerifyShuffle({ onOperatorTopUp });
 
   const senderForSeat = useCallback((seatNo) => {
     const seat = tableSeats[seatNo];
@@ -992,6 +997,8 @@ export function usePokerTable({
       publicKey: null,
       handKeyHandId: null,
       handKeys: new Map(),
+      publicKeySubmissions: new Map(),
+      onChainPublicKeySubmitted: new Set(),
       currentHandSetup: {
         hand_id: HAND_ID,
         hand_number: HAND_ID,
@@ -1011,6 +1018,7 @@ export function usePokerTable({
     seenHistoryTipsRef.current = new Set();
     previousConnectedRef.current = false;
     pendingHistorySyncRef.current = false;
+    onChainPublicKeyInFlightRef.current = new Set();
     cheatReportRef.current = null;
     setCheatReport(null);
     setTerminalResult(null);
@@ -1334,6 +1342,53 @@ export function usePokerTable({
     }
   }, []);
 
+  const submitOnChainPublicKeyVerification = useCallback(async (game) => {
+    const hand = game?.clientState?.current_hand?.();
+    if (!game || !hand?.get_current_state?.().is_finished?.()) return false;
+
+    const player = Number(game.clientState.player_index);
+    const handId = Number(game.clientState.hand_id ?? HAND_ID);
+    const verificationKey = `${lobbyId}:${tableId}:${handId}:${player}`;
+    if (!lobbyId || !tableId || !handId) return false;
+    if (game.onChainPublicKeySubmitted?.has(verificationKey)) return true;
+    if (onChainPublicKeyInFlightRef.current.has(verificationKey)) return false;
+
+    const submission = game.publicKeySubmissions?.get(player);
+    const keys = game.handKeys?.get(handId);
+    const traces = submission?.traces
+      ?? (game.signingKey ? reconstructShuffleTrace(hand, player, game.signingKey) : null);
+    const publicKey = submission?.publicKey ?? game.publicKey ?? hand.player_keys?.[player];
+    if (!traces || !publicKey) return false;
+
+    onChainPublicKeyInFlightRef.current.add(verificationKey);
+    appendGameLog(`Submit on-chain public key verification for Player ${player + 1}`);
+    try {
+      await submitPublicKeyVerification({
+        lobbyId,
+        tableId,
+        handId,
+        hand,
+        player,
+        publicKey,
+        traces,
+        operatorPrivateKey: keys?.operatorPrivateKey,
+      });
+      game.onChainPublicKeySubmitted ??= new Set();
+      game.onChainPublicKeySubmitted.add(verificationKey);
+      appendGameLog(`On-chain public key verification submitted for Player ${player + 1}`);
+      return true;
+    } catch (error) {
+      appendGameLog(
+        `On-chain public key verification failed: ${error?.shortMessage ?? error?.message ?? error}`,
+        senderForSeat(player),
+        'error',
+      );
+      return false;
+    } finally {
+      onChainPublicKeyInFlightRef.current.delete(verificationKey);
+    }
+  }, [appendGameLog, lobbyId, senderForSeat, submitPublicKeyVerification, tableId]);
+
   const submitProtocolAction = useCallback(async () => {
     const game = await ensureKeys();
     if (!game) return null;
@@ -1345,6 +1400,7 @@ export function usePokerTable({
       if (!game.seenFinished) {
         game.seenFinished = true;
       }
+      await submitOnChainPublicKeyVerification(game);
       updateView();
       return null;
     }
@@ -1383,6 +1439,14 @@ export function usePokerTable({
       if (!built) return null;
       const wire = submitAction(built.action, built.logLines);
       if (wire && built.action.type === 'SubmitPublicKey') {
+        game.publicKeySubmissions ??= new Map();
+        game.publicKeySubmissions.set(built.action.player, {
+          publicKey: built.action.public_key,
+          traces: built.action.traces,
+        });
+        if (hand.get_current_state().current_state === POKER_HAND_STATE_FINISHED) {
+          await submitOnChainPublicKeyVerification(game);
+        }
         game.shuffleTrace = null;
       }
       return wire;
@@ -1391,7 +1455,19 @@ export function usePokerTable({
         protocolActionInFlightRef.current = null;
       }
     }
-  }, [buildAutomaticAction, ensureKeys, submitAction, submitNop, updateView]);
+  }, [
+    buildAutomaticAction,
+    ensureKeys,
+    submitAction,
+    submitNop,
+    submitOnChainPublicKeyVerification,
+    updateView,
+  ]);
+
+  useEffect(() => {
+    if (snapshot.currentGameState?.state !== 'Finished') return;
+    submitOnChainPublicKeyVerification(gameRef.current);
+  }, [snapshot.currentGameState?.state, submitOnChainPublicKeyVerification]);
 
   const startNextHand = useCallback(() => {
     const game = gameRef.current;
@@ -1436,6 +1512,8 @@ export function usePokerTable({
     game.publicKey = null;
     game.handKeyHandId = null;
     game.shuffleTrace = null;
+    game.publicKeySubmissions = new Map();
+    game.onChainPublicKeySubmitted = new Set();
     game.seenFinished = false;
     handHistoryRef.current = [];
     seenHistoryTipsRef.current = new Set();
@@ -1462,6 +1540,8 @@ export function usePokerTable({
     game.publicKey = null;
     game.handKeyHandId = null;
     game.shuffleTrace = null;
+    game.publicKeySubmissions = new Map();
+    game.onChainPublicKeySubmitted = new Set();
     game.seenFinished = false;
     game.currentHandSetup = {
       hand_id: targetHandId,

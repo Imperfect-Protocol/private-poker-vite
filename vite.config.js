@@ -28,6 +28,13 @@ export default defineConfig({
   ],
   server: {
     port: 3000,
+    proxy: {
+      '/local-rpc': {
+        target: 'http://localhost:8547',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/local-rpc$/, '/'),
+      },
+    },
   },
   resolve: {
     alias: {

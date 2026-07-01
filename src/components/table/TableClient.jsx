@@ -165,6 +165,7 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
     publishMessage: table.publishMessage,
     prepareNetworkSession: table.prepareNetworkSession,
     prepareHandSession: table.prepareHandSession,
+    onOperatorTopUp: handleOperatorTopUp,
   });
   const playerAddresses = useMemo(() => (
     table.tableData?.players?.map((player) => player.playerAddress).filter(Boolean) ?? []

@@ -1,5 +1,5 @@
-import { chainConfig as devnodeChainConfig } from './devnode';
-import { chainConfig as sepoliaChainConfig } from './sepolia';
+import { chainConfig as devnodeChainConfig } from './devnode.js';
+import { chainConfig as sepoliaChainConfig } from './sepolia.js';
 
 const chainConfigs = {
   devnode: devnodeChainConfig,
@@ -20,7 +20,7 @@ export const LOBBY_CONTRACT_ADDRESS = CHAIN_CONFIG.privatePokerContractAddress;
 export const ACCOUNT_CONTRACT_ADDRESS = CHAIN_CONFIG.privatePokerContractAddress;
 export const CHIPS_CONTRACT_ADDRESS = CHAIN_CONFIG.privatePokerContractAddress;
 export const CASHIER_CONTRACT_ADDRESS = CHAIN_CONFIG.privatePokerContractAddress;
-export const VERIFY_SHUFFLE_CONTRACT_ADDRESS = CHAIN_CONFIG.privatePokerContractAddress;
-export const VERIFY_UNMASKING_CONTRACT_ADDRESS = CHAIN_CONFIG.privatePokerContractAddress;
+export const VERIFY_SHUFFLE_CONTRACT_ADDRESS = CHAIN_CONFIG.verifyShuffleContractAddress;
+export const VERIFY_UNMASKING_CONTRACT_ADDRESS = CHAIN_CONFIG.verifyUnmaskingContractAddress;
 export const CHAIN_POLLING_INTERVAL = CHAIN_CONFIG.pollingInterval;
 export const CHAIN_STALE_TIME = CHAIN_CONFIG.staleTime;

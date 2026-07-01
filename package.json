@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build && vite build --ssr server/standalone-entry.js --outDir dist/server --emptyOutDir false",
     "lint": "eslint .",
+    "test": "node --test src/tests/*.test.js",
     "preview": "vite preview"
   },
   "dependencies": {
