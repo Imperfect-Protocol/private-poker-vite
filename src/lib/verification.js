@@ -3,7 +3,7 @@ import {
   POKER_HAND_STATE_UNMASK_COMMUNITY_CARDS,
   POKER_HAND_STATE_UNMASK_HOLE_CARDS,
   POKER_HAND_STATE_UNMASK_SHOWDOWN,
-} from './crum_pkr/index.js';
+} from './crum_pkr/index.ts';
 
 export const HAND_VERIFICATION_ABI = parseAbi([
   'function submitPublicKey(uint256 lobby_id, uint256 table_id, uint256 hand_id, uint8 player, bytes public_key, bytes[] masked_before, bytes[] masked_after, bytes[] traces, bytes[] player_keys, bytes[][] shuffle_history, bytes[][][] unmasking_sequence_cards, uint8[] unmasking_actors, uint8[] unmasking_states)',

@@ -1,10 +1,10 @@
-import { PokerBettingState } from "./poker_bets.js";
-import { PokerDeck, UnmaskedCards } from "./poker_deck.js";
+import { PokerBettingState } from "./poker_bets.ts";
+import { PokerDeck, UnmaskedCards } from "./poker_deck.ts";
 import {
   POKER_TABLE_EVENT,
   POKER_TABLE_ROUND,
   PokerEventSource,
-} from "./poker_events.js";
+} from "./poker_events.ts";
 import {
   POKER_HAND_STATE_BET,
   POKER_HAND_STATE_BIG_BLIND,
@@ -17,14 +17,23 @@ import {
   POKER_HAND_STATE_UNMASK_SHOWDOWN,
   POKER_HOLDEM_PREFLOP,
   PokerHandState,
-} from "./poker_state.js";
-import { verifyShuffleTraced, verifyUnmaskingHistory } from "./crum_bls_bridge.js";
+  type PokerHandStateEnum,
+} from "./poker_state.ts";
+import { verifyShuffleTraced, verifyUnmaskingHistory } from "./crum_bls_bridge.ts";
+import type {
+  G2Point,
+  MaskedCards,
+  PokerHandDisplayData,
+  Scalar,
+  ShuffleTrace,
+  UnmaskingSequenceEntry,
+} from "./types.ts";
 
-function cloneUnmaskedCardsList(cards) {
+function cloneUnmaskedCardsList(cards: UnmaskedCards[]): UnmaskedCards[] {
   return cards.map((card) => card.clone());
 }
 
-function cloneUnmaskingSequence(sequence) {
+function cloneUnmaskingSequence(sequence: UnmaskingSequenceEntry[]): UnmaskingSequenceEntry[] {
   return sequence.map(([player, state_type, submitted_cards]) => [
     player,
     state_type,
@@ -33,7 +42,24 @@ function cloneUnmaskingSequence(sequence) {
 }
 
 export class PokerHand extends PokerEventSource {
-  constructor(num_players, max_rounds, dealer_button, initial_chips, small_blind) {
+  poker_deck: PokerDeck;
+  shuffled_deck: MaskedCards;
+  shuffle_history: MaskedCards[];
+  player_cards: UnmaskedCards[];
+  player_keys: Array<G2Point | null>;
+  community_cards: UnmaskedCards[];
+  unmasking_sequence: UnmaskingSequenceEntry[];
+  current_state: PokerHandState;
+  betting_state: PokerBettingState;
+  small_blind: number;
+
+  constructor(
+    num_players: number,
+    max_rounds: number,
+    dealer_button: number,
+    initial_chips: number[],
+    small_blind: number,
+  ) {
     super();
     const poker_deck = PokerDeck.new();
     const shuffled_deck = poker_deck.masked_cards();
@@ -49,12 +75,18 @@ export class PokerHand extends PokerEventSource {
     this.small_blind = small_blind;
   }
 
-  static new(num_players, max_rounds, dealer_button, initial_chips, small_blind) {
+  static new(
+    num_players: number,
+    max_rounds: number,
+    dealer_button: number,
+    initial_chips: number[],
+    small_blind: number,
+  ): PokerHand {
     return new PokerHand(num_players, max_rounds, dealer_button, initial_chips, small_blind);
   }
 
-  clone() {
-    const hand = Object.create(PokerHand.prototype);
+  clone(): PokerHand {
+    const hand = Object.create(PokerHand.prototype) as PokerHand;
     hand.event_listeners = new Set();
     hand.pending_events = [];
     hand.poker_deck = this.poker_deck.clone();
@@ -70,49 +102,52 @@ export class PokerHand extends PokerEventSource {
     return hand;
   }
 
-  get_current_state() {
+  get_current_state(): PokerHandState {
     return this.current_state;
   }
 
-  get_poker_deck() {
+  get_poker_deck(): PokerDeck {
     return this.poker_deck;
   }
 
-  get_shuffled_deck() {
+  get_shuffled_deck(): MaskedCards {
     return this.shuffled_deck;
   }
 
-  get_player_cards() {
+  get_player_cards(): UnmaskedCards[] {
     return this.player_cards;
   }
 
-  get_community_cards(round) {
+  get_community_cards(round: number): UnmaskedCards | null {
     if (round === POKER_HOLDEM_PREFLOP) {
       return null;
     }
     return this.community_cards[round - 1] ?? null;
   }
 
-  get_call_amount_required(player) {
+  get_call_amount_required(player: number): number {
     return this.betting_state.call_amount_required(player);
   }
 
-  get_chips_remaining(player) {
+  get_chips_remaining(player: number): number {
     return this.betting_state.chips_remaining(player);
   }
 
-  get_small_blind() {
+  get_small_blind(): number {
     return this.small_blind;
   }
 
-  get_big_blind() {
+  get_big_blind(): number {
     return this.small_blind * 2;
   }
 
-  to_display_data(acting_player = null, acting_signing_key = null) {
+  to_display_data(
+    acting_player: number | null = null,
+    acting_signing_key: Scalar | null = null,
+  ): PokerHandDisplayData {
     const state = this.get_current_state();
     const state_enum = state.to_enum();
-    const community_cards = [];
+    const community_cards: string[] = [];
     for (let round = 0; round < state.max_rounds; round += 1) {
       const cards = this.get_community_cards(round);
       if (cards) {
@@ -120,7 +155,7 @@ export class PokerHand extends PokerEventSource {
       }
     }
 
-    const player_cards_by_seat = {};
+    const player_cards_by_seat: Record<number, string[]> = {};
     this.player_cards.forEach((cards, player) => {
       player_cards_by_seat[player] = this.project_card_strings(cards);
     });
@@ -151,7 +186,7 @@ export class PokerHand extends PokerEventSource {
     };
   }
 
-  submit_shuffled_deck(player, deck) {
+  submit_shuffled_deck(player: number, deck: MaskedCards): void {
     const state = this.get_current_state().to_enum();
     if (state.type !== "Shuffle") {
       throw new Error("Not in shuffle state");
@@ -174,7 +209,7 @@ export class PokerHand extends PokerEventSource {
     }
   }
 
-  submit_small_blind(player) {
+  submit_small_blind(player: number): void {
     const state = this.get_current_state().to_enum();
     if (state.type !== "SmallBlind") {
       throw new Error("Not in small blind state");
@@ -196,7 +231,7 @@ export class PokerHand extends PokerEventSource {
     this.current_state.current_state = POKER_HAND_STATE_BIG_BLIND;
   }
 
-  submit_big_blind(player) {
+  submit_big_blind(player: number): void {
     const state = this.get_current_state().to_enum();
     if (state.type !== "BigBlind") {
       throw new Error("Not in big blind state");
@@ -222,7 +257,7 @@ export class PokerHand extends PokerEventSource {
     this.current_state.current_state = POKER_HAND_STATE_UNMASK_HOLE_CARDS;
   }
 
-  submit_player_cards(player, player_cards) {
+  submit_player_cards(player: number, player_cards: UnmaskedCards[]): boolean {
     const state = this.get_current_state().to_enum();
     if (state.type !== "UnmaskHoleCards") {
       throw new Error("Not in unmask hole cards state");
@@ -256,7 +291,7 @@ export class PokerHand extends PokerEventSource {
     return false;
   }
 
-  submit_player_cards_showdown(player, player_cards) {
+  submit_player_cards_showdown(player: number, player_cards: UnmaskedCards[]): boolean {
     const state = this.get_current_state().to_enum();
     if (state.type !== "UnmaskShowdown") {
       throw new Error("Not in unmask hole cards state");
@@ -289,7 +324,7 @@ export class PokerHand extends PokerEventSource {
     return false;
   }
 
-  submit_community_cards(player, round, cards) {
+  submit_community_cards(player: number, round: number, cards: UnmaskedCards): boolean {
     const state = this.get_current_state().to_enum();
     if (state.type !== "UnmaskCommunityCards") {
       throw new Error("Not in bet state");
@@ -328,7 +363,7 @@ export class PokerHand extends PokerEventSource {
     return false;
   }
 
-  submit_public_key(player, pk, traces) {
+  submit_public_key(player: number, pk: G2Point, traces: ShuffleTrace[]): void {
     const state = this.get_current_state().to_enum();
     if (state.type !== "SubmitPublicKey") {
       throw new Error("Not in submit public key state");
@@ -360,7 +395,7 @@ export class PokerHand extends PokerEventSource {
     }
   }
 
-  verify_shuffle(player, pk, traces) {
+  verify_shuffle(player: number, pk: G2Point, traces: ShuffleTrace[]): boolean {
     const num_players = this.current_state.num_players;
     const dealer = this.current_state.dealer_button;
 
@@ -373,15 +408,15 @@ export class PokerHand extends PokerEventSource {
     try {
       verifyShuffleTraced(prev_cards, next_cards, pk, traces);
       return true;
-    } catch (err) {
-      if (err?.code === "CRUM_BLS_UNAVAILABLE") {
+    } catch (err: unknown) {
+      if (typeof err === "object" && err != null && "code" in err && err.code === "CRUM_BLS_UNAVAILABLE") {
         throw err;
       }
       return false;
     }
   }
 
-  submit_bet(player, amount) {
+  submit_bet(player: number, amount: number): void {
     const state = this.get_current_state().to_enum();
     if (state.type !== "Bet") {
       throw new Error("Not in bet state");
@@ -403,7 +438,7 @@ export class PokerHand extends PokerEventSource {
     this.check_betting_round_complete();
   }
 
-  verify_unmasking() {
+  verify_unmasking(): number | null {
     const final_shuffled_deck = this.shuffle_history.at(-1);
     if (final_shuffled_deck == null) {
       throw new Error("No shuffle history");
@@ -411,7 +446,7 @@ export class PokerHand extends PokerEventSource {
     return verifyUnmaskingHistory(this);
   }
 
-  check_betting_round_complete() {
+  check_betting_round_complete(): void {
     if (this.betting_state.is_betting_round_complete()) {
       this.betting_state.refund_uncalled_bets();
       this.current_state.next_dealer();
@@ -427,7 +462,7 @@ export class PokerHand extends PokerEventSource {
     }
   }
 
-  emit_round_started(round_number) {
+  emit_round_started(round_number: number): void {
     this.emit_event({
       type: POKER_TABLE_EVENT.ROUND_STARTED,
       seat_number: this.current_state.get_current_player(),
@@ -435,14 +470,14 @@ export class PokerHand extends PokerEventSource {
     });
   }
 
-  result_seat_number() {
+  result_seat_number(): number {
     const active_winner = this.betting_state.active_players.filter(Boolean).length === 1
       ? this.betting_state.active_players.findIndex(Boolean)
       : null;
     return active_winner ?? this.current_state.get_current_player();
   }
 
-  safe_call_amount_required(player) {
+  safe_call_amount_required(player: number): number {
     try {
       return this.get_call_amount_required(player);
     } catch {
@@ -450,7 +485,7 @@ export class PokerHand extends PokerEventSource {
     }
   }
 
-  safe_chips_remaining(player) {
+  safe_chips_remaining(player: number): number {
     try {
       return this.get_chips_remaining(player);
     } catch {
@@ -458,24 +493,27 @@ export class PokerHand extends PokerEventSource {
     }
   }
 
-  safe_unmasked_card_strings(cards) {
+  safe_unmasked_card_strings(cards: UnmaskedCards): string[] {
     try {
-      return this.poker_deck.unmasked_cards(cards).filter(Boolean).map((card) => card.toString());
+      return this.poker_deck
+        .unmasked_cards(cards)
+        .filter((card): card is NonNullable<typeof card> => card != null)
+        .map((card) => card.toString());
     } catch {
       return [];
     }
   }
 
-  project_card_strings(cards) {
+  project_card_strings(cards: UnmaskedCards | null | undefined): string[] {
     if (!cards) return [];
     try {
-      return this.poker_deck.unmasked_cards(cards).map((card) => card?.toString() ?? null);
+      return this.poker_deck.unmasked_cards(cards).map((card) => card?.toString() ?? "");
     } catch {
-      return Array.from({ length: cards?.len?.() ?? 0 }, () => null);
+      return Array.from({ length: cards?.len?.() ?? 0 }, () => "");
     }
   }
 
-  project_private_card_strings(cards, signing_key) {
+  project_private_card_strings(cards: UnmaskedCards, signing_key: Scalar | null): string[] {
     const public_projection = this.project_card_strings(cards);
     if (!signing_key || public_projection.every(Boolean)) {
       return public_projection;
@@ -491,7 +529,7 @@ export class PokerHand extends PokerEventSource {
     }
   }
 
-  state_label(state) {
+  state_label(state: PokerHandStateEnum): string {
     switch (state.type) {
       case "Shuffle":
         return `Shuffle on Player ${state.player + 1}`;

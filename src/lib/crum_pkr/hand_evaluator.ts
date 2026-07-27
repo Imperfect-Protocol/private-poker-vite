@@ -14,6 +14,15 @@ const RANK_VALUE = {
   A: 14,
 };
 
+type Rank = keyof typeof RANK_VALUE;
+type CardText = string;
+type ParsedCard = { rank: string; suit: string; value: number; card: CardText };
+type HandScore = number[];
+export type HoldemShowdownResult = {
+  hands: Array<{ cards: CardText[] | null | undefined; rank: string | null }>;
+  winner: number | null;
+};
+
 const HAND_RANK = [
   'HiCard',
   'Pair',
@@ -26,19 +35,19 @@ const HAND_RANK = [
   'StraightFlush',
 ];
 
-function parseCard(card) {
+function parseCard(card: CardText): ParsedCard {
   return {
     rank: card[0],
     suit: card[1],
-    value: RANK_VALUE[card[0]],
+    value: RANK_VALUE[card[0] as Rank],
     card,
   };
 }
 
-function combinations(cards, size) {
-  const result = [];
+function combinations<T>(cards: T[], size: number): T[][] {
+  const result: T[][] = [];
 
-  function visit(start, combo) {
+  function visit(start: number, combo: T[]): void {
     if (combo.length === size) {
       result.push(combo);
       return;
@@ -53,7 +62,7 @@ function combinations(cards, size) {
   return result;
 }
 
-function compareScore(left, right) {
+function compareScore(left: HandScore, right: HandScore): number {
   for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
     const diff = (left[index] ?? 0) - (right[index] ?? 0);
     if (diff !== 0) return diff;
@@ -61,7 +70,7 @@ function compareScore(left, right) {
   return 0;
 }
 
-function straightHigh(values) {
+function straightHigh(values: number[]): number | null {
   const uniqueValues = [...new Set(values)].sort((a, b) => b - a);
   if (uniqueValues.includes(14)) uniqueValues.push(1);
 
@@ -75,13 +84,13 @@ function straightHigh(values) {
   return null;
 }
 
-function scoreFiveCards(cards) {
+function scoreFiveCards(cards: CardText[]): HandScore {
   const parsed = cards.map(parseCard);
   const values = parsed.map((card) => card.value).sort((a, b) => b - a);
   const flush = parsed.every((card) => card.suit === parsed[0].suit);
   const straight = straightHigh(values);
 
-  const groups = [...values.reduce((map, value) => {
+  const groups = [...values.reduce((map: Map<number, number>, value) => {
     map.set(value, (map.get(value) ?? 0) + 1);
     return map;
   }, new Map()).entries()]
@@ -91,7 +100,7 @@ function scoreFiveCards(cards) {
   if (flush && straight) return [8, straight];
 
   if (groups[0].count === 4) {
-    return [7, groups[0].value, groups.find((group) => group.count === 1).value];
+    return [7, groups[0].value, groups.find((group) => group.count === 1)?.value ?? 0];
   }
 
   if (groups[0].count === 3 && groups[1]?.count === 2) {
@@ -111,7 +120,7 @@ function scoreFiveCards(cards) {
 
   if (groups[0].count === 2 && groups[1]?.count === 2) {
     const pairs = groups.filter((group) => group.count === 2).map((group) => group.value);
-    return [2, ...pairs, groups.find((group) => group.count === 1).value];
+    return [2, ...pairs, groups.find((group) => group.count === 1)?.value ?? 0];
   }
 
   if (groups[0].count === 2) {
@@ -125,25 +134,29 @@ function scoreFiveCards(cards) {
   return [0, ...values];
 }
 
-export function bestHoldemScore(cards) {
+export function bestHoldemScore(cards: CardText[]): HandScore | null {
   if (cards.length < 5) return null;
 
-  return combinations(cards, 5).reduce((best, hand) => {
+  return combinations(cards, 5).reduce<HandScore | null>((best, hand) => {
     const score = scoreFiveCards(hand);
     return !best || compareScore(score, best) > 0 ? score : best;
   }, null);
 }
 
-export function holdemRank(cards) {
+export function holdemRank(cards: CardText[]): string | null {
   const score = bestHoldemScore(cards);
   if (!score) return null;
   return HAND_RANK[score[0]] ?? null;
 }
 
-export function holdemShowdown(hands, communityCards, activePlayers = []) {
-  let bestScore = null;
-  let winner = null;
-  const rankedHands = hands.map((cards) => ({ cards, rank: null }));
+export function holdemShowdown(
+  hands: Array<CardText[] | null | undefined>,
+  communityCards: CardText[],
+  activePlayers: boolean[] = [],
+): HoldemShowdownResult {
+  let bestScore: HandScore | null = null;
+  let winner: number | null = null;
+  const rankedHands: HoldemShowdownResult["hands"] = hands.map((cards) => ({ cards, rank: null }));
 
   hands.forEach((hand, seat) => {
     if (activePlayers.length > 0 && activePlayers[seat] === false) return;
@@ -166,7 +179,11 @@ export function holdemShowdown(hands, communityCards, activePlayers = []) {
   return { hands: rankedHands, winner };
 }
 
-export function holdemWinners(hands, communityCards, activePlayers = []) {
+export function holdemWinners(
+  hands: Array<CardText[] | null | undefined>,
+  communityCards: CardText[],
+  activePlayers: boolean[] = [],
+): number[] {
   const { winner } = holdemShowdown(hands, communityCards, activePlayers);
   return winner == null ? [] : [winner];
 }

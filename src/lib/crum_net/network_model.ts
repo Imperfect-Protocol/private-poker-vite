@@ -1,5 +1,17 @@
+export interface NetworkShape {
+  connector: NetworkConnector;
+  lobby: PokerLobby;
+  games?: PokerGame[];
+  players?: Bot[];
+}
+
 export class Network {
-  constructor({ connector, lobby, games = [], players = [] }) {
+  connector: NetworkConnector;
+  lobby: PokerLobby;
+  games: PokerGame[];
+  players: Bot[];
+
+  constructor({ connector, lobby, games = [], players = [] }: NetworkShape) {
     this.connector = connector;
     this.lobby = lobby;
     this.games = games;
@@ -10,35 +22,35 @@ export class Network {
 export class NetworkConnector {}
 
 export class PokerLobby {
-  async run() {
+  async run(): Promise<unknown> {
     throw new Error("PokerLobby.run must be implemented by the concrete lobby");
   }
 }
 
 export class PokerGame {
-  session() {
+  session(): PokerGameSession {
     throw new Error("PokerGame.session must be implemented by the concrete game");
   }
 
-  session_mut() {
+  session_mut(): PokerGameSession {
     return this.session();
   }
 }
 
 export class PokerGameSession {
-  state() {
+  state(): unknown {
     throw new Error("PokerGameSession.state must be implemented by the concrete session");
   }
 
-  state_mut() {
+  state_mut(): unknown {
     return this.state();
   }
 
-  connector() {
+  connector(): NetworkConnector {
     throw new Error("PokerGameSession.connector must be implemented by the concrete session");
   }
 
-  connector_mut() {
+  connector_mut(): NetworkConnector {
     return this.connector();
   }
 }
@@ -46,11 +58,11 @@ export class PokerGameSession {
 export class BotGame {}
 
 export class Bot {
-  games() {
+  games(): BotGame[] {
     throw new Error("Bot.games must be implemented by the concrete bot");
   }
 
-  games_mut() {
+  games_mut(): BotGame[] {
     return this.games();
   }
 }

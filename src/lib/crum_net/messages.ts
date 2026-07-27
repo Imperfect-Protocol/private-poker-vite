@@ -1,5 +1,32 @@
 import { make_public_key_from_compressed_slice, PUBLIC_KEY_COMPRESSED_LEN } from "../crum_bls/util.js";
-import { PokerHandProxy, PokerTable } from "../crum_pkr/index.js";
+import { PokerHandProxy, PokerTable } from "../crum_pkr/index.ts";
+import type {
+  ChipAmount,
+  CompressedG1,
+  CompressedG2,
+  EndpointDescriptorShape,
+  G2Point,
+  HandId,
+  HandshakeSignalShape,
+  P2pMessage as P2pMessageShape,
+  PeerAnnouncementShape,
+  PeerId,
+  PlayerIndex,
+  PokerAction as PokerActionShape,
+  PokerActionEnvelopeShape,
+  PokerActionEnvelopeWireShape,
+  PokerActionWire,
+  PokerClientApplyResult,
+  PokerNopWire,
+  PokerSubmit,
+  PokerSubmitResult,
+  PokerTableLike,
+  Sequence,
+  ShuffleTrace,
+  StateTuple,
+  TableId,
+  TopologyPolicyValue,
+} from "../crum_pkr/types.ts";
 import {
   deserialize_masked_cards,
   deserialize_unmasked_card_sets,
@@ -7,10 +34,17 @@ import {
   serialize_masked_cards,
   serialize_unmasked_card_sets,
   serialize_unmasked_cards,
-} from "./poker_deck_serialization.js";
+} from "./poker_deck_serialization.ts";
 
-export class PeerAnnouncement {
-  constructor({ peer_id, player_index, table_id, annonce_public_key }) {
+type SubmitData = Record<string, unknown> & { args?: unknown[] };
+
+export class PeerAnnouncement implements PeerAnnouncementShape {
+  peer_id: PeerId;
+  player_index: PlayerIndex;
+  table_id: TableId;
+  annonce_public_key: Uint8Array;
+
+  constructor({ peer_id, player_index, table_id, annonce_public_key }: PeerAnnouncementShape) {
     this.peer_id = peer_id;
     this.player_index = player_index;
     this.table_id = table_id;
@@ -18,16 +52,28 @@ export class PeerAnnouncement {
   }
 }
 
-export class EndpointDescriptor {
-  constructor({ public_ip, public_port, transport_hint }) {
+export class EndpointDescriptor implements EndpointDescriptorShape {
+  public_ip: string;
+  public_port: number;
+  transport_hint: string;
+
+  constructor({ public_ip, public_port, transport_hint }: EndpointDescriptorShape) {
     this.public_ip = public_ip;
     this.public_port = public_port;
     this.transport_hint = transport_hint;
   }
 }
 
-export class HandshakeSignal {
-  constructor({ table_id, hand_id, from, to, topology, encrypted_endpoint, nonce }) {
+export class HandshakeSignal implements HandshakeSignalShape {
+  table_id: TableId;
+  hand_id: HandId;
+  from: PeerId;
+  to: PeerId;
+  topology: TopologyPolicyValue;
+  encrypted_endpoint: Uint8Array;
+  nonce: number;
+
+  constructor({ table_id, hand_id, from, to, topology, encrypted_endpoint, nonce }: HandshakeSignalShape) {
     this.table_id = table_id;
     this.hand_id = hand_id;
     this.from = from;
@@ -38,8 +84,26 @@ export class HandshakeSignal {
   }
 }
 
-export class PokerActionEnvelope {
-  constructor({ table_id, hand_id, from, sequence, sequence_number = null, expected_state, action, result = null }) {
+export class PokerActionEnvelope implements PokerActionEnvelopeShape {
+  table_id: TableId;
+  hand_id: HandId;
+  from: PlayerIndex;
+  sequence: Sequence;
+  sequence_number: Sequence | null;
+  expected_state: StateTuple;
+  action: PokerActionShape;
+  result: PokerSubmitResult | null;
+
+  constructor({
+    table_id,
+    hand_id,
+    from,
+    sequence,
+    sequence_number = null,
+    expected_state,
+    action,
+    result = null,
+  }: PokerActionEnvelopeShape) {
     this.table_id = table_id;
     this.hand_id = hand_id;
     this.from = from;
@@ -50,7 +114,7 @@ export class PokerActionEnvelope {
     this.result = result;
   }
 
-  to_wire(log_lines) {
+  to_wire(log_lines: string[]): PokerActionEnvelopeWire {
     const action = poker_action_to_wire(this.action);
     return new PokerActionEnvelopeWire({
       table_id: this.table_id,
@@ -65,7 +129,18 @@ export class PokerActionEnvelope {
   }
 }
 
-export class PokerActionEnvelopeWire {
+export class PokerActionEnvelopeWire implements PokerActionEnvelopeWireShape {
+  table_id: TableId;
+  hand_id: HandId;
+  from: PlayerIndex;
+  sequence: Sequence;
+  sequence_number: Sequence | null;
+  expected_state: StateTuple;
+  nop: PokerNopWire | null;
+  action: PokerActionWire | null;
+  submit: PokerSubmit | null;
+  log_lines: string[];
+
   constructor({
     table_id,
     hand_id,
@@ -77,7 +152,7 @@ export class PokerActionEnvelopeWire {
     submit = null,
     nop = null,
     log_lines,
-  }) {
+  }: PokerActionEnvelopeWireShape) {
     this.table_id = table_id;
     this.hand_id = hand_id;
     this.from = from;
@@ -85,14 +160,27 @@ export class PokerActionEnvelopeWire {
     this.sequence_number = sequence_number;
     this.expected_state = expected_state;
     this.nop = nop;
-    this.action = nop ? null : action ?? poker_submit_to_action_wire(submit);
-    this.submit = nop ? null : submit ?? poker_action_wire_to_submit(this.action);
+    if (nop) {
+      this.action = null;
+      this.submit = null;
+    } else if (action != null) {
+      this.action = action;
+      this.submit = submit ?? poker_action_wire_to_submit(action);
+    } else if (submit != null) {
+      this.action = poker_submit_to_action_wire(submit);
+      this.submit = submit;
+    } else {
+      throw new Error("PokerActionEnvelopeWire requires action, submit, or nop");
+    }
     this.log_lines = log_lines;
   }
 
-  to_envelope() {
+  to_envelope(): PokerActionEnvelope {
     if (this.nop) {
       throw new Error("NOP wire messages do not have PokerHand submit envelopes");
+    }
+    if (this.action == null) {
+      throw new Error("PokerActionEnvelopeWire has no action");
     }
     return new PokerActionEnvelope({
       table_id: this.table_id,
@@ -107,26 +195,45 @@ export class PokerActionEnvelopeWire {
 }
 
 export const P2pMessage = Object.freeze({
-  Handshake: (signal) => ({ type: "Handshake", signal }),
-  PokerAction: (envelope) => ({ type: "PokerAction", envelope }),
-  Ack: ({ from, sequence }) => ({ type: "Ack", from, sequence }),
-  StateDigest: ({ from, hand_id, digest }) => ({ type: "StateDigest", from, hand_id, digest }),
+  Handshake: (signal: HandshakeSignalShape): P2pMessageShape => ({ type: "Handshake", signal }),
+  PokerAction: (
+    envelope: PokerActionEnvelope | PokerActionEnvelopeWire | PokerActionEnvelopeShape | PokerActionEnvelopeWireShape,
+  ): P2pMessageShape => ({ type: "PokerAction", envelope }),
+  Ack: ({ from, sequence }: { from: PeerId; sequence: Sequence }): P2pMessageShape => ({ type: "Ack", from, sequence }),
+  StateDigest: ({ from, hand_id, digest }: { from: PeerId; hand_id: HandId; digest: Uint8Array }): P2pMessageShape => ({
+    type: "StateDigest",
+    from,
+    hand_id,
+    digest,
+  }),
 });
 
 export const PokerAction = Object.freeze({
-  SubmitShuffledDeck: ({ player, deck }) => ({ type: "SubmitShuffledDeck", player, deck }),
-  SubmitSmallBlind: ({ player }) => ({ type: "SubmitSmallBlind", player }),
-  SubmitBigBlind: ({ player }) => ({ type: "SubmitBigBlind", player }),
-  SubmitPlayerCards: ({ player, cards }) => ({ type: "SubmitPlayerCards", player, cards }),
-  SubmitCommunityCards: ({ player, round, cards }) => ({
+  SubmitShuffledDeck: ({ player, deck }: Omit<Extract<PokerActionShape, { type: "SubmitShuffledDeck" }>, "type">): PokerActionShape => ({
+    type: "SubmitShuffledDeck",
+    player,
+    deck,
+  }),
+  SubmitSmallBlind: ({ player }: { player: PlayerIndex }): PokerActionShape => ({ type: "SubmitSmallBlind", player }),
+  SubmitBigBlind: ({ player }: { player: PlayerIndex }): PokerActionShape => ({ type: "SubmitBigBlind", player }),
+  SubmitPlayerCards: ({ player, cards }: Omit<Extract<PokerActionShape, { type: "SubmitPlayerCards" }>, "type">): PokerActionShape => ({
+    type: "SubmitPlayerCards",
+    player,
+    cards,
+  }),
+  SubmitCommunityCards: ({ player, round, cards }: Omit<Extract<PokerActionShape, { type: "SubmitCommunityCards" }>, "type">): PokerActionShape => ({
     type: "SubmitCommunityCards",
     player,
     round,
     cards,
   }),
-  SubmitShowdownCards: ({ player, cards }) => ({ type: "SubmitShowdownCards", player, cards }),
-  SubmitBet: ({ player, amount }) => ({ type: "SubmitBet", player, amount }),
-  SubmitPublicKey: ({ player, public_key, traces }) => ({
+  SubmitShowdownCards: ({ player, cards }: Omit<Extract<PokerActionShape, { type: "SubmitShowdownCards" }>, "type">): PokerActionShape => ({
+    type: "SubmitShowdownCards",
+    player,
+    cards,
+  }),
+  SubmitBet: ({ player, amount }: { player: PlayerIndex; amount: ChipAmount }): PokerActionShape => ({ type: "SubmitBet", player, amount }),
+  SubmitPublicKey: ({ player, public_key, traces }: Omit<Extract<PokerActionShape, { type: "SubmitPublicKey" }>, "type">): PokerActionShape => ({
     type: "SubmitPublicKey",
     player,
     public_key,
@@ -134,7 +241,7 @@ export const PokerAction = Object.freeze({
   }),
 });
 
-export function poker_action_to_wire(action) {
+export function poker_action_to_wire(action: PokerActionShape): PokerActionWire {
   switch (action.type) {
     case "SubmitShuffledDeck":
       return {
@@ -175,11 +282,11 @@ export function poker_action_to_wire(action) {
         traces: action.traces.map((trace) => [trace.after_index, trace.claimed_before_index]),
       };
     default:
-      throw new Error(`unknown PokerAction: ${action.type}`);
+      return assertNever(action);
   }
 }
 
-export function poker_action_wire_to_submit(action) {
+export function poker_action_wire_to_submit(action: PokerActionWire): PokerSubmit {
   switch (action.type) {
     case "SubmitShuffledDeck":
       return {
@@ -216,65 +323,65 @@ export function poker_action_wire_to_submit(action) {
         args: [action.player, action.amount],
       };
     default:
-      throw new Error(`unknown PokerActionWire: ${action.type}`);
+      return assertNever(action);
   }
 }
 
-export function poker_submit_to_action_wire(submit) {
+export function poker_submit_to_action_wire(submit: PokerSubmit): PokerActionWire {
   if (!submit?.method) {
     throw new Error("submit method is required");
   }
-  const data = submit.data ?? {};
+  const data: SubmitData = submit.data ?? {};
   const args = submit.args ?? data.args ?? [];
   switch (submit.method) {
     case "submit_shuffled_deck":
       return {
         type: "SubmitShuffledDeck",
-        player: args[0] ?? data.player,
-        deck_g1_compressed: args[1] ?? data.deck_g1_compressed,
+        player: asPlayerIndex(args[0] ?? data.player),
+        deck_g1_compressed: asCompressedG1Array(args[1] ?? data.deck_g1_compressed),
       };
     case "submit_small_blind":
-      return { type: "SubmitSmallBlind", player: args[0] ?? data.player };
+      return { type: "SubmitSmallBlind", player: asPlayerIndex(args[0] ?? data.player) };
     case "submit_big_blind":
-      return { type: "SubmitBigBlind", player: args[0] ?? data.player };
+      return { type: "SubmitBigBlind", player: asPlayerIndex(args[0] ?? data.player) };
     case "submit_player_cards":
       return {
         type: "SubmitPlayerCards",
-        player: args[0] ?? data.player,
-        player_cards_g1_compressed: args[1] ?? data.player_cards_g1_compressed,
+        player: asPlayerIndex(args[0] ?? data.player),
+        player_cards_g1_compressed: asCompressedG1Matrix(args[1] ?? data.player_cards_g1_compressed),
       };
     case "submit_community_cards":
       return {
         type: "SubmitCommunityCards",
-        player: args[0] ?? data.player,
-        round: args[1] ?? data.round,
-        cards_g1_compressed: args[2] ?? data.cards_g1_compressed,
+        player: asPlayerIndex(args[0] ?? data.player),
+        round: asNumber(args[1] ?? data.round),
+        cards_g1_compressed: asCompressedG1Array(args[2] ?? data.cards_g1_compressed),
       };
     case "submit_player_cards_showdown":
       return {
         type: "SubmitShowdownCards",
-        player: args[0] ?? data.player,
-        player_cards_g1_compressed: args[1] ?? data.player_cards_g1_compressed,
+        player: asPlayerIndex(args[0] ?? data.player),
+        player_cards_g1_compressed: asCompressedG1Matrix(args[1] ?? data.player_cards_g1_compressed),
       };
     case "submit_public_key":
       return {
         type: "SubmitPublicKey",
-        player: args[0] ?? data.player,
-        public_key_g2_compressed: args[1] ?? data.public_key_g2_compressed,
-        traces: args[2] ?? data.traces,
+        player: asPlayerIndex(args[0] ?? data.player),
+        public_key_g2_compressed: asCompressedG2(args[1] ?? data.public_key_g2_compressed),
+        traces: asTraceTuples(args[2] ?? data.traces),
       };
     case "submit_bet":
       return {
         type: "SubmitBet",
-        player: args[0] ?? data.player,
-        amount: args[1] ?? data.amount,
+        player: asPlayerIndex(args[0] ?? data.player),
+        amount: asNumber(args[1] ?? data.amount),
       };
     default:
       throw new Error(`unknown PokerHand submit method: ${submit.method}`);
   }
 }
 
-export function poker_action_wire_to_action(action) {
+export function poker_action_wire_to_action(action: PokerActionWire): PokerActionShape {
   switch (action.type) {
     case "SubmitShuffledDeck":
       return PokerAction.SubmitShuffledDeck({
@@ -311,7 +418,7 @@ export function poker_action_wire_to_action(action) {
       }
       return PokerAction.SubmitPublicKey({
         player: action.player,
-        public_key: make_public_key_from_compressed_slice(action.public_key_g2_compressed),
+        public_key: make_public_key_from_compressed_slice(action.public_key_g2_compressed) as G2Point,
         traces: action.traces.map(([after_index, claimed_before_index]) => ({
           after_index,
           claimed_before_index,
@@ -319,12 +426,19 @@ export function poker_action_wire_to_action(action) {
       });
     }
     default:
-      throw new Error(`unknown PokerActionWire: ${action.type}`);
+      return assertNever(action);
   }
 }
 
 export class PokerClientState {
-  constructor(player_index, table_id, hand_id, table) {
+  player_index: PlayerIndex;
+  table_id: TableId;
+  hand_id: HandId;
+  sequence: Sequence;
+  seen: Set<string>;
+  table: PokerTableLike;
+
+  constructor(player_index: PlayerIndex, table_id: TableId, hand_id: HandId, table: PokerTableLike) {
     this.player_index = player_index;
     this.table_id = table_id;
     this.hand_id = hand_id;
@@ -333,11 +447,11 @@ export class PokerClientState {
     this.table = table;
   }
 
-  static new(player_index, table_id, hand_id, table) {
+  static new(player_index: PlayerIndex, table_id: TableId, hand_id: HandId, table: PokerTableLike): PokerClientState {
     return new PokerClientState(player_index, table_id, hand_id, table);
   }
 
-  submit_local_action(action) {
+  submit_local_action(action: PokerActionShape): PokerActionEnvelope {
     const expected_state = this.current_state_tuple();
     const result = this.apply_action(clone_action(action));
 
@@ -356,7 +470,9 @@ export class PokerClientState {
     });
   }
 
-  submit_nop({ current_player, reason = "your turn not mine" } = {}) {
+  submit_nop(
+    { current_player, reason = "your turn not mine" }: { current_player?: PlayerIndex | null; reason?: string } = {},
+  ): PokerActionEnvelopeWire {
     const expected_state = this.current_state_tuple();
 
     return new PokerActionEnvelopeWire({
@@ -375,11 +491,11 @@ export class PokerClientState {
     });
   }
 
-  apply_envelope(envelope) {
+  apply_envelope(envelope: PokerActionEnvelope | PokerActionEnvelopeShape): boolean {
     return this.apply_envelope_result(envelope).applied;
   }
 
-  apply_envelope_result(envelope) {
+  apply_envelope_result(envelope: PokerActionEnvelope | PokerActionEnvelopeShape): PokerClientApplyResult {
     if (envelope.table_id !== this.table_id || envelope.hand_id !== this.hand_id) {
       return { applied: false, result: null };
     }
@@ -417,7 +533,7 @@ export class PokerClientState {
     return { applied: true, result };
   }
 
-  apply_nop_wire(wire) {
+  apply_nop_wire(wire: PokerActionEnvelopeWire | PokerActionEnvelopeWireShape): boolean {
     if (wire.table_id !== this.table_id || wire.hand_id !== this.hand_id) {
       return false;
     }
@@ -436,7 +552,7 @@ export class PokerClientState {
     return hand;
   }
 
-  current_state_tuple() {
+  current_state_tuple(): StateTuple {
     const hand = this.table.get_current_hand();
     if (hand == null) {
       throw new Error("hand not started");
@@ -444,7 +560,7 @@ export class PokerClientState {
     return hand.get_current_state().to_tuple();
   }
 
-  apply_action(action) {
+  apply_action(action: PokerActionShape): PokerSubmitResult {
     const hand = this.current_hand_mut();
     const proxy = new PokerHandProxy(hand);
     switch (action.type) {
@@ -465,30 +581,94 @@ export class PokerClientState {
       case "SubmitPublicKey":
         return proxy.submit_public_key(action.player, action.public_key, action.traces, { publish: false });
       default:
-        throw new Error(`unknown PokerAction: ${action.type}`);
+        return assertNever(action);
     }
   }
 }
 
 export const PokerGameClientState = PokerClientState;
 
-function clone_action(action) {
-  return {
-    ...action,
-    deck: action.deck?.clone?.() ?? action.deck,
-    cards: Array.isArray(action.cards)
-      ? action.cards.map((cards) => cards?.clone?.() ?? cards)
-      : action.cards?.clone?.() ?? action.cards,
-    traces: action.traces?.map((trace) => ({ ...trace })) ?? action.traces,
-  };
+function clone_action(action: PokerActionShape): PokerActionShape {
+  switch (action.type) {
+    case "SubmitShuffledDeck":
+      return { ...action, deck: action.deck.clone() };
+    case "SubmitPlayerCards":
+    case "SubmitShowdownCards":
+      return { ...action, cards: action.cards.map((cards) => cards.clone()) };
+    case "SubmitCommunityCards":
+      return { ...action, cards: action.cards.clone() };
+    case "SubmitPublicKey":
+      return { ...action, traces: action.traces.map((trace) => ({ ...trace })) };
+    case "SubmitSmallBlind":
+    case "SubmitBigBlind":
+    case "SubmitBet":
+      return { ...action };
+    default:
+      return assertNever(action);
+  }
 }
 
-function seenKey(player, sequence) {
+function seenKey(player: PlayerIndex, sequence: Sequence): string {
   return `${player}:${sequence}`;
 }
 
-function tupleEquals(left, right) {
+function tupleEquals(left: StateTuple, right: StateTuple): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function asNumber(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error("expected finite number");
+  }
+  return value;
+}
+
+function asPlayerIndex(value: unknown): PlayerIndex {
+  return asNumber(value);
+}
+
+function asCompressedG1(value: unknown): CompressedG1 {
+  if (!(value instanceof Uint8Array)) {
+    throw new Error("expected compressed G1 bytes");
+  }
+  return value;
+}
+
+function asCompressedG2(value: unknown): CompressedG2 {
+  if (!(value instanceof Uint8Array)) {
+    throw new Error("expected compressed G2 bytes");
+  }
+  return value;
+}
+
+function asCompressedG1Array(value: unknown): CompressedG1[] {
+  if (!Array.isArray(value)) {
+    throw new Error("expected compressed G1 byte array");
+  }
+  return value.map(asCompressedG1);
+}
+
+function asCompressedG1Matrix(value: unknown): CompressedG1[][] {
+  if (!Array.isArray(value)) {
+    throw new Error("expected compressed G1 byte matrix");
+  }
+  return value.map(asCompressedG1Array);
+}
+
+function asTraceTuples(value: unknown): Array<[number, number]> {
+  if (!Array.isArray(value)) {
+    throw new Error("expected shuffle trace tuples");
+  }
+  return value.map((trace) => {
+    if (!Array.isArray(trace) || trace.length !== 2) {
+      throw new Error("expected shuffle trace tuple");
+    }
+    return [asNumber(trace[0]), asNumber(trace[1])];
+  });
+}
+
+function assertNever(value: never): never {
+  throw new Error(`unexpected variant: ${String(value)}`);
 }
 
 export { PokerTable };

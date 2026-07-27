@@ -1,4 +1,5 @@
-import { POKER_HOLDEM_ROUNDS } from "./poker_state.js";
+import { POKER_HOLDEM_ROUNDS } from "./poker_state.ts";
+import type { PokerCardText, PokerHand, PokerSubmit, Scalar } from "./types.ts";
 
 const HIDDEN_CARD = "\u{1F0A0}";
 
@@ -65,23 +66,23 @@ const CARD_CODEPOINTS = Object.freeze({
   }),
 });
 
-export function formatPokerCard(card) {
+export function formatPokerCard(card: PokerCardText): string {
   if (card == null || card === "_!" || card === HIDDEN_CARD) return HIDDEN_CARD;
 
   const text = card.toString();
   if (text.length !== 2) return text;
 
   const [rank, suit] = text;
-  const codepoint = CARD_CODEPOINTS[suit]?.[rank];
+  const codepoint = CARD_CODEPOINTS[suit as keyof typeof CARD_CODEPOINTS]?.[rank as keyof typeof CARD_CODEPOINTS["s"]];
   return codepoint == null ? text : String.fromCodePoint(codepoint);
 }
 
-export function cardsToConsoleString(cards) {
+export function cardsToConsoleString(cards: PokerCardText[]): string {
   return cards.map(formatPokerCard).join(", ");
 }
 
-export function communityCardConsoleLines(hand) {
-  const communityCards = [];
+export function communityCardConsoleLines(hand: PokerHand): string[] {
+  const communityCards: PokerCardText[] = [];
   const deck = hand.get_poker_deck();
 
   for (let round = 0; round < POKER_HOLDEM_ROUNDS; round += 1) {
@@ -94,7 +95,7 @@ export function communityCardConsoleLines(hand) {
   return [`Community cards: ${cardsToConsoleString(communityCards)}`];
 }
 
-export function playerCardConsoleLines(hand) {
+export function playerCardConsoleLines(hand: PokerHand): string[] {
   const deck = hand.get_poker_deck();
   return hand.get_player_cards().map((cards, index) => {
     const unmasked = deck.unmasked_cards(cards);
@@ -102,7 +103,7 @@ export function playerCardConsoleLines(hand) {
   });
 }
 
-export function playerOwnCardsConsoleString(player, hand, signingKey) {
+export function playerOwnCardsConsoleString(player: number, hand: PokerHand, signingKey: Scalar | null): string {
   const deck = hand.get_poker_deck();
   const cards = hand.get_player_cards()[player]?.clone();
   if (!cards) return `${HIDDEN_CARD}, ${HIDDEN_CARD}`;
@@ -115,7 +116,7 @@ export function playerOwnCardsConsoleString(player, hand, signingKey) {
   }
 }
 
-export function submitConsoleLine(submit) {
+export function submitConsoleLine(submit: PokerSubmit | null | undefined): string | null {
   const player = Number(submit?.args?.[0] ?? 0);
   const playerLabel = Number.isFinite(player) ? player + 1 : "?";
   const amount = submit?.args?.[1];

@@ -15,8 +15,28 @@ export const POKER_HOLDEM_TURN = 2;
 export const POKER_HOLDEM_RIVER = 3;
 export const POKER_HOLDEM_ROUNDS = 4;
 
+export type PokerHandStateEnum =
+  | { type: "Shuffle"; player: number; is_dealer: boolean }
+  | { type: "SmallBlind"; player: number }
+  | { type: "BigBlind"; player: number }
+  | { type: "Bet"; round: number; player: number }
+  | { type: "UnmaskHoleCards"; player: number }
+  | { type: "UnmaskCommunityCards"; round: number; player: number }
+  | { type: "UnmaskShowdown"; player: number }
+  | { type: "SubmitPublicKey"; player: number }
+  | { type: "Cheated"; player: number }
+  | { type: "Finished" }
+  | { type: "Invalid" };
+
 export class PokerHandState {
-  constructor(num_players, max_rounds, dealer_button) {
+  num_players: number;
+  max_rounds: number;
+  dealer_button: number;
+  current_player: number;
+  current_round: number;
+  current_state: number;
+
+  constructor(num_players: number, max_rounds: number, dealer_button: number) {
     this.num_players = num_players;
     this.max_rounds = max_rounds;
     this.dealer_button = dealer_button;
@@ -25,11 +45,11 @@ export class PokerHandState {
     this.current_state = POKER_HAND_STATE_SHUFFLE;
   }
 
-  static new(num_players, max_rounds, dealer_button) {
+  static new(num_players: number, max_rounds: number, dealer_button: number): PokerHandState {
     return new PokerHandState(num_players, max_rounds, dealer_button);
   }
 
-  clone() {
+  clone(): PokerHandState {
     const state = new PokerHandState(this.num_players, this.max_rounds, this.dealer_button);
     state.current_player = this.current_player;
     state.current_round = this.current_round;
@@ -37,32 +57,32 @@ export class PokerHandState {
     return state;
   }
 
-  is_dealer(player) {
+  is_dealer(player: number): boolean {
     return this.dealer_button === player;
   }
 
-  is_current_dealer() {
+  is_current_dealer(): boolean {
     return this.is_dealer(this.current_player);
   }
 
-  is_finished() {
+  is_finished(): boolean {
     return this.current_state === POKER_HAND_STATE_FINISHED;
   }
 
-  get_current_player() {
+  get_current_player(): number {
     return this.current_player;
   }
 
-  next_dealer() {
+  next_dealer(): void {
     this.current_player = this.dealer_button;
   }
 
-  next_player() {
+  next_player(): boolean {
     this.current_player = (this.current_player + 1) % this.num_players;
     return this.current_player === this.dealer_button;
   }
 
-  next_player_masked(mask, from_dealer) {
+  next_player_masked(mask: boolean[], from_dealer: boolean): boolean {
     if (from_dealer) {
       this.next_dealer();
       if (mask[this.current_player]) {
@@ -81,7 +101,7 @@ export class PokerHandState {
     }
   }
 
-  next_round() {
+  next_round(): boolean {
     const next_round = this.current_round + 1;
 
     if (next_round > this.max_rounds) {
@@ -97,11 +117,11 @@ export class PokerHandState {
     return false;
   }
 
-  to_tuple() {
+  to_tuple(): [number, number, number] {
     return [this.current_round, this.current_player, this.current_state];
   }
 
-  to_enum() {
+  to_enum(): PokerHandStateEnum {
     switch (this.current_state) {
       case POKER_HAND_STATE_SHUFFLE:
         return {

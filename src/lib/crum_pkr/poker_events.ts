@@ -1,3 +1,5 @@
+import type { PokerEvent, PokerEventListener, PokerEventUnsubscribe } from "./types.ts";
+
 export const POKER_TABLE_EVENT = Object.freeze({
   HAND_STARTED: "hand_started",
   DECK_SHUFFLED: "deck_shuffled",
@@ -19,30 +21,33 @@ export const POKER_TABLE_ROUND = Object.freeze({
 });
 
 export class PokerEventSource {
+  event_listeners: Set<PokerEventListener>;
+  pending_events: PokerEvent[];
+
   constructor() {
     this.event_listeners = new Set();
     this.pending_events = [];
   }
 
-  on_event(listener) {
+  on_event(listener: PokerEventListener): PokerEventUnsubscribe {
     this.event_listeners.add(listener);
     return () => this.event_listeners.delete(listener);
   }
 
-  emit_event(event) {
+  emit_event(event: PokerEvent): PokerEvent {
     const normalized = { ...event };
     this.pending_events.push(normalized);
     this.event_listeners.forEach((listener) => listener(normalized));
     return normalized;
   }
 
-  drain_events() {
+  drain_events(): PokerEvent[] {
     const events = this.pending_events;
     this.pending_events = [];
     return events;
   }
 
-  clear_events() {
+  clear_events(): void {
     this.pending_events = [];
   }
 }

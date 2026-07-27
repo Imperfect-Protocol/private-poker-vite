@@ -6,48 +6,54 @@ import {
   keccak256,
   maskPoint,
   pointEquals,
-} from "./crum_bls_bridge.js";
+} from "./crum_bls_bridge.ts";
+import type { G1Point, RandomSource, Scalar, ShuffleTrace } from "./types.ts";
 
-function bytesForCard(card) {
+function bytesForCard(card: string): Uint8Array {
   return Uint8Array.from([card.charCodeAt(0), card.charCodeAt(1)]);
 }
 
-function cloneCards(cards) {
+function cloneCards(cards: G1Point[]): G1Point[] {
   return cards.map((card) => clonePoint(card));
 }
 
-function rngIndex(rng, upperExclusive) {
+function rngIndex(rng: RandomSource, upperExclusive: number): number {
   if (typeof rng === "function") {
     return Math.floor(rng() * upperExclusive);
   }
-  if (typeof rng?.random === "function") {
+  if (typeof rng === "object" && rng != null && "random" in rng && typeof rng.random === "function") {
     return Math.floor(rng.random() * upperExclusive);
   }
-  if (typeof rng?.next === "function") {
+  if (typeof rng === "object" && rng != null && "next" in rng && typeof rng.next === "function") {
     return Math.floor(rng.next() * upperExclusive);
   }
   throw new Error("rng is required");
 }
 
 export class PokerCard {
-  constructor(bytes = new Uint8Array()) {
+  bytes: Uint8Array;
+
+  constructor(bytes: Uint8Array | number[] = new Uint8Array()) {
     this.bytes = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
   }
 
-  clone() {
+  clone(): PokerCard {
     return new PokerCard(this.bytes);
   }
 
-  toString() {
+  toString(): string {
     return String.fromCharCode(...this.bytes);
   }
 }
 
 export class PokerDeck {
-  constructor(poker_cards = null, cards_g1 = null) {
+  poker_cards: PokerCard[];
+  cards_g1: G1Point[];
+
+  constructor(poker_cards: Array<PokerCard | Uint8Array | number[]> | null = null, cards_g1: G1Point[] | null = null) {
     if (poker_cards == null && cards_g1 == null) {
-      const cards = [];
-      const points = [];
+      const cards: PokerCard[] = [];
+      const points: G1Point[] = [];
       for (const rank of "23456789TJQKA") {
         for (const suit of "shdc") {
           const card = `${rank}${suit}`;
@@ -60,21 +66,25 @@ export class PokerDeck {
       return;
     }
 
+    if (poker_cards == null || cards_g1 == null) {
+      throw new Error("poker_cards and cards_g1 must be provided together");
+    }
+
     this.poker_cards = poker_cards.map((card) =>
       card instanceof PokerCard ? card.clone() : new PokerCard(card),
     );
     this.cards_g1 = cloneCards(cards_g1);
   }
 
-  static new() {
+  static new(): PokerDeck {
     return new PokerDeck();
   }
 
-  clone() {
+  clone(): PokerDeck {
     return new PokerDeck(this.poker_cards, this.cards_g1);
   }
 
-  find_card(revealed_point) {
+  find_card(revealed_point: G1Point): PokerCard | null {
     const card_index = this.cards_g1.findIndex((point) => pointEquals(revealed_point, point));
     if (card_index === -1) {
       return null;
@@ -82,64 +92,66 @@ export class PokerDeck {
     return this.poker_cards[card_index].clone();
   }
 
-  cards() {
+  cards(): G1Point[] {
     return cloneCards(this.cards_g1);
   }
 
-  len() {
+  len(): number {
     return this.cards_g1.length;
   }
 
-  masked_cards() {
+  masked_cards(): MaskedCards {
     return MaskedCards.new(this.cards());
   }
 
-  unmasked_cards(unmasked_cards) {
+  unmasked_cards(unmasked_cards: UnmaskedCards): Array<PokerCard | null> {
     return unmasked_cards.cards_g1.map((card_g1) => this.find_card(card_g1));
   }
 }
 
 export class MaskedCards {
-  constructor(cards_g1 = []) {
+  cards_g1: G1Point[];
+
+  constructor(cards_g1: G1Point[] = []) {
     this.cards_g1 = cloneCards(cards_g1);
   }
 
-  static new(cards_g1) {
+  static new(cards_g1: G1Point[]): MaskedCards {
     return new MaskedCards(cards_g1);
   }
 
-  static default() {
+  static default(): MaskedCards {
     return new MaskedCards();
   }
 
-  clone() {
+  clone(): MaskedCards {
     return new MaskedCards(this.cards_g1);
   }
 
-  cards() {
+  cards(): G1Point[] {
     return cloneCards(this.cards_g1);
   }
 
-  cards_n(count) {
+  cards_n(count: number): G1Point[] {
     return cloneCards(this.cards_g1.slice(0, count));
   }
 
-  len() {
+  len(): number {
     return this.cards_g1.length;
   }
 
-  mask(sk) {
+  mask(sk: Scalar): void {
     this.cards_g1 = this.cards_g1.map((card_g1) => maskPoint(card_g1, sk));
   }
 
-  shuffle(rng) {
+  shuffle(rng: RandomSource): void {
     for (let i = this.cards_g1.length - 1; i > 0; i -= 1) {
       const j = rngIndex(rng, i + 1);
       [this.cards_g1[i], this.cards_g1[j]] = [this.cards_g1[j], this.cards_g1[i]];
     }
   }
 
-  shuffle_traced(rng) {
+  shuffle_traced(rng: RandomSource): ShuffleTrace[] {
     const cards_g1_indexed = this.cards_g1.map((card, before_index) => ({
       before_index,
       card,
@@ -162,43 +174,45 @@ export class MaskedCards {
     return res;
   }
 
-  hash() {
+  hash(): Uint8Array {
     const bytes = this.cards_g1.map((card) => compressedBytes(card));
     return keccak256(bytes);
   }
 
-  deal(count) {
+  deal(count: number): UnmaskedCards {
     const dealt_cards = this.cards_g1.splice(0, count);
     return UnmaskedCards.new(dealt_cards);
   }
 }
 
 export class UnmaskedCards {
-  constructor(cards_g1 = []) {
+  cards_g1: G1Point[];
+
+  constructor(cards_g1: G1Point[] = []) {
     this.cards_g1 = cloneCards(cards_g1);
   }
 
-  static new(cards_g1) {
+  static new(cards_g1: G1Point[]): UnmaskedCards {
     return new UnmaskedCards(cards_g1);
   }
 
-  static default() {
+  static default(): UnmaskedCards {
     return new UnmaskedCards();
   }
 
-  clone() {
+  clone(): UnmaskedCards {
     return new UnmaskedCards(this.cards_g1);
   }
 
-  cards() {
+  cards(): G1Point[] {
     return cloneCards(this.cards_g1);
   }
 
-  len() {
+  len(): number {
     return this.cards_g1.length;
   }
 
-  unmask(sk) {
+  unmask(sk: Scalar): void {
     const sk_inv = invertSigningKey(sk);
     this.cards_g1 = this.cards_g1.map((card_g1) => maskPoint(card_g1, sk_inv));
   }

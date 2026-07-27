@@ -1,15 +1,22 @@
-function rustError(message) {
+function rustError(message: string): never {
   throw new Error(message);
 }
 
-function assertU64(value, name) {
+function assertU64(value: number, name: string): void {
   if (!Number.isSafeInteger(value) || value < 0) {
     rustError(`${name} must be a non-negative safe integer`);
   }
 }
 
 export class PokerBettingState {
-  constructor(num_players, initial_chips) {
+  player_chips: number[];
+  current_round_bets: Array<number | null>;
+  pot: number;
+  active_players: boolean[];
+  allin_players: boolean[];
+  current_highest_bet: number;
+
+  constructor(num_players: number, initial_chips: number[]) {
     if (!Array.isArray(initial_chips) || initial_chips.length !== num_players) {
       rustError("initial_chips must contain one chip count per player");
     }
@@ -24,11 +31,11 @@ export class PokerBettingState {
     this.current_highest_bet = 0;
   }
 
-  static new(num_players, initial_chips) {
+  static new(num_players: number, initial_chips: number[]): PokerBettingState {
     return new PokerBettingState(num_players, initial_chips);
   }
 
-  clone() {
+  clone(): PokerBettingState {
     const state = new PokerBettingState(0, []);
     state.player_chips = [...this.player_chips];
     state.current_round_bets = [...this.current_round_bets];
@@ -39,7 +46,7 @@ export class PokerBettingState {
     return state;
   }
 
-  call_amount_required(player) {
+  call_amount_required(player: number): number {
     if (!this.active_players[player]) {
       return rustError("Player has already folded");
     }
@@ -50,21 +57,21 @@ export class PokerBettingState {
     return amount_needed_to_call;
   }
 
-  chips_remaining(player) {
+  chips_remaining(player: number): number {
     return this.player_chips[player];
   }
 
-  get_active_players() {
+  get_active_players(): boolean[] {
     return this.active_players;
   }
 
-  get_betting_players() {
+  get_betting_players(): boolean[] {
     return this.active_players.map((active, player) => (
       active && !this.allin_players[player]
     ));
   }
 
-  process_action(player, amount) {
+  process_action(player: number, amount: number): void {
     assertU64(amount, "amount");
     if (!this.active_players[player]) {
       return rustError("Player has already folded");
@@ -105,7 +112,7 @@ export class PokerBettingState {
     }
   }
 
-  is_betting_round_complete() {
+  is_betting_round_complete(): boolean {
     const active_count = this.active_players.filter((active) => active).length;
     const betting_count = this.get_betting_players().filter(Boolean).length;
 
@@ -138,7 +145,7 @@ export class PokerBettingState {
     return true;
   }
 
-  refund_uncalled_bets() {
+  refund_uncalled_bets(): void {
     const active_bets = this.active_players
       .map((active, player) => (active ? this.current_round_bets[player] ?? 0 : null))
       .filter((bet) => bet != null)
@@ -169,7 +176,7 @@ export class PokerBettingState {
     this.current_highest_bet = Math.max(0, ...this.current_round_bets.map((bet) => bet ?? 0));
   }
 
-  next_street() {
+  next_street(): void {
     this.current_round_bets.fill(null);
     this.current_highest_bet = 0;
   }

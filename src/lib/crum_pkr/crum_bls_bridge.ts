@@ -9,25 +9,32 @@ import {
   POKER_HAND_STATE_UNMASK_COMMUNITY_CARDS,
   POKER_HAND_STATE_UNMASK_HOLE_CARDS,
   POKER_HAND_STATE_UNMASK_SHOWDOWN,
-} from "./poker_state.js";
+} from "./poker_state.ts";
+import type { G1Point, G2Point, Scalar, ShuffleTrace } from "./types.ts";
+import type { PokerHand } from "./poker_hand.ts";
 
-export function hashToCurve(bytes) {
-  return hash_to_curve(bytes);
+export function hashToCurve(bytes: Uint8Array | number[] | string): G1Point {
+  return hash_to_curve(bytes) as unknown as G1Point;
 }
 
-export function maskPoint(point, signingKey) {
+export function maskPoint(point: G1Point, signingKey: Scalar): G1Point {
   return mask(point, signingKey);
 }
 
-export function verifyShuffleTraced(maskedBefore, maskedAfter, publicKey, traces) {
+export function verifyShuffleTraced(
+  maskedBefore: G1Point[],
+  maskedAfter: G1Point[],
+  publicKey: G2Point,
+  traces: ShuffleTrace[],
+): void {
   return verify_shuffle_traced(maskedBefore, maskedAfter, publicKey, traces);
 }
 
-export function keccak256(chunks) {
+export function keccak256(chunks: Uint8Array[]): Uint8Array {
   return keccak_256(concatBytes(...chunks));
 }
 
-export function verifyUnmaskingHistory(hand) {
+export function verifyUnmaskingHistory(hand: PokerHand): number | null {
   const finalShuffledDeck = hand.shuffle_history.at(-1);
   if (finalShuffledDeck == null) {
     throw new Error("No shuffle history");
@@ -37,7 +44,7 @@ export function verifyUnmaskingHistory(hand) {
   const numPlayers = hand.current_state.num_players;
   let deckIdx = 0;
 
-  const trackedHoleCards = [];
+  const trackedHoleCards: G1Point[][] = [];
   for (let i = 0; i < numPlayers; i += 1) {
     trackedHoleCards.push(finalShuffledDeckCards.slice(deckIdx, deckIdx + 2));
     deckIdx += 2;
@@ -52,7 +59,7 @@ export function verifyUnmaskingHistory(hand) {
   let commRoundIdx = 0;
   let commUnmaskCount = 0;
 
-  const preparedPks = [];
+  const preparedPks: G2Point[] = [];
   for (const pk of hand.player_keys) {
     if (pk == null) {
       throw new Error("Missing PK for unmask audit");
@@ -60,7 +67,7 @@ export function verifyUnmaskingHistory(hand) {
     preparedPks.push(pk);
   }
 
-  const auditTrail = [];
+  const auditTrail: Array<[G1Point, G1Point, number]> = [];
 
   for (const [actionPlayer, stateType, submittedCards] of hand.unmasking_sequence) {
     switch (stateType) {
@@ -129,21 +136,21 @@ export function verifyUnmaskingHistory(hand) {
   return null;
 }
 
-export function compressedBytes(point) {
+export function compressedBytes(point: G1Point): Uint8Array {
   if (typeof point?.toRawBytes === "function") {
     return point.toRawBytes(true);
   }
   throw new TypeError("G1 point does not expose compressed bytes");
 }
 
-export function invertSigningKey(signingKey) {
+export function invertSigningKey(signingKey: Scalar): Scalar {
   if (typeof signingKey === "bigint") {
     return Fr.inv(signingKey);
   }
   throw new TypeError("SigningKey must be a scalar bigint");
 }
 
-export function pointEquals(left, right) {
+export function pointEquals(left: G1Point, right: G1Point): boolean {
   if (left === right) {
     return true;
   }
@@ -156,6 +163,6 @@ export function pointEquals(left, right) {
   return false;
 }
 
-export function clonePoint(point) {
+export function clonePoint(point: G1Point): G1Point {
   return point;
 }

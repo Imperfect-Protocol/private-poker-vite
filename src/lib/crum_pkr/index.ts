@@ -3,8 +3,8 @@ export {
   PokerDeck,
   MaskedCards,
   UnmaskedCards,
-} from "./poker_deck.js";
-export { PokerBettingState } from "./poker_bets.js";
+} from "./poker_deck.ts";
+export { PokerBettingState } from "./poker_bets.ts";
 export {
   cardsToConsoleString,
   communityCardConsoleLines,
@@ -12,7 +12,7 @@ export {
   playerCardConsoleLines,
   playerOwnCardsConsoleString,
   submitConsoleLine,
-} from "./poker_console.js";
+} from "./poker_console.ts";
 export {
   PokerHandState,
   POKER_HAND_STATE_SHUFFLE,
@@ -30,15 +30,15 @@ export {
   POKER_HOLDEM_TURN,
   POKER_HOLDEM_RIVER,
   POKER_HOLDEM_ROUNDS,
-} from "./poker_state.js";
-export { PokerHand } from "./poker_hand.js";
+} from "./poker_state.ts";
+export { PokerHand } from "./poker_hand.ts";
 export {
   POKER_HAND_SUBMIT_METHODS,
   PokerHandProxy,
-} from "./poker_hand_proxy.js";
-export { PokerTable } from "./poker_table.js";
+} from "./poker_hand_proxy.ts";
+export { PokerTable } from "./poker_table.ts";
 export {
   POKER_TABLE_EVENT,
   POKER_TABLE_ROUND,
   PokerEventSource,
-} from "./poker_events.js";
+} from "./poker_events.ts";
