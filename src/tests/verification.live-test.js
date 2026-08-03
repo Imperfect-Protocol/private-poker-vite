@@ -4,7 +4,6 @@ import { test } from 'node:test';
 import {
   createPublicClient,
   createWalletClient,
-  encodeFunctionData,
   formatEther,
   http,
   isAddress,
@@ -18,12 +17,15 @@ import {
   CHAIN_RPC_URL,
   PRIVATE_POKER_CONTRACT_ADDRESS,
   VERIFY_SHUFFLE_CONTRACT_ADDRESS,
+  VERIFY_UNMASKING_CONTRACT_ADDRESS,
 } from '../lib/chain/index.js';
 import {
   VERIFY_SHUFFLE_ABI,
+  VERIFY_UNMASKING_ABI,
   buildShuffleVerificationArgs,
-  buildSubmitPublicKeyVerificationArgs,
+  buildUnmaskingVerificationArgs,
 } from '../lib/verification.js';
+import { configuredMaxGas } from '../lib/gas.js';
 import {
   POKER_HOLDEM_ROUNDS,
   PokerTable,
@@ -35,16 +37,19 @@ const LIVE_ABI = parseAbi([
   'function createTable(uint256 lobby_id, uint256 table_id, string name, uint256 buy_in, uint256 num_players, address player_address, address operator, bytes annonce_public_key)',
   'function joinTable(uint256 lobby_id, uint256 table_id, address player_address, address operator, bytes annonce_public_key)',
   'function startHand(uint256 lobby_id, uint256 table_id)',
-  'function submitPublicKey(uint256 lobby_id, uint256 table_id, uint256 hand_id, uint8 player, bytes public_key, bytes[] masked_before, bytes[] masked_after, bytes[] traces, bytes[] player_keys, bytes[][] shuffle_history, bytes[][][] unmasking_sequence_cards, uint8[] unmasking_actors, uint8[] unmasking_states)',
 ]);
 
 const ANVIL_ACCOUNTS = [
   privateKeyToAccount('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'),
   privateKeyToAccount('0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d'),
+  // privateKeyToAccount('0x5de4111afa1a4b4b9f1faae4c1b9bf7d09230a575301d1df0d62a17eb340e345'),
+  // privateKeyToAccount('0x7c852118294443be1bde3ebdcd99382415a8d082dbafa64fe2ab9079e6cde31c'),
+  // privateKeyToAccount('0x47e179ec1974888300232f2d8590a4b263e68e771b3d5d2a39a7edbf68867245'),
+  // privateKeyToAccount('0x8b3a350cf5c34c9194ca3a545d42a0b3222acb54c2d6392e5d7844d27cb1b897'),
 ];
 
 const DEFAULT_FUNDER_PRIVATE_KEY = '0xb6b15c8cb491557369f3c7d2c287b053eb229daa9c22138887752191c9520659';
-const PLAYER_SIGNING_KEYS = [17n, 19n];
+const PLAYER_SIGNING_KEYS = [17n, 19n, 23n, 29n, 31n, 37n];
 const INITIAL_CHIPS = 1000;
 const SMALL_BLIND = 10;
 
@@ -70,6 +75,10 @@ function requireDevnode() {
   assert.ok(
     isAddress(VERIFY_SHUFFLE_CONTRACT_ADDRESS),
     `VERIFY_SHUFFLE_CONTRACT_ADDRESS is not configured: ${VERIFY_SHUFFLE_CONTRACT_ADDRESS}`,
+  );
+  assert.ok(
+    isAddress(VERIFY_UNMASKING_CONTRACT_ADDRESS),
+    `VERIFY_UNMASKING_CONTRACT_ADDRESS is not configured: ${VERIFY_UNMASKING_CONTRACT_ADDRESS}`,
   );
 }
 
@@ -103,20 +112,21 @@ function makePokerTable(numPlayers) {
   return table;
 }
 
-function generateFinishedTwoPlayerHand() {
-  const table = makePokerTable(2);
+function generateFinishedHand(numPlayers) {
+  const table = makePokerTable(numPlayers);
   const hand = table.get_current_hand();
-  const publicKeys = PLAYER_SIGNING_KEYS.map(make_public_key_from_signing_key);
+  const signingKeys = PLAYER_SIGNING_KEYS.slice(0, numPlayers);
+  const publicKeys = signingKeys.map(make_public_key_from_signing_key);
   const tracesByPlayer = new Map();
   let steps = 0;
 
   while (!hand.get_current_state().is_finished()) {
     steps += 1;
-    assert.ok(steps < 100, 'poker hand did not finish');
+    assert.ok(steps < 250, 'poker hand did not finish');
 
     const pokerState = hand.get_current_state().to_enum();
     const player = pokerState.player;
-    const signingKey = PLAYER_SIGNING_KEYS[player];
+    const signingKey = signingKeys[player];
 
     switch (pokerState.type) {
       case 'Shuffle': {
@@ -195,13 +205,29 @@ async function ensureFunded(client, account) {
   await expectSuccessfulReceipt(client, hash, `fund ${account.address}`);
 }
 
-async function expectSuccessfulReceipt(client, hash, label) {
+const USD_PER_ETH = 2_000;
+const WEI_PER_ETH = 1_000_000_000_000_000_000n;
+
+async function expectSuccessfulReceipt(client, hash, label, testContext = null) {
   const receipt = await client.waitForTransactionReceipt({ hash });
-  assert.equal(receipt.status, 'success', `${label} reverted in tx ${hash}`);
+  testContext?.diagnostic(`${label}: gasUsed=${receipt.gasUsed}, ${receiptCostLabel(receipt)}`);
+  assert.equal(
+    receipt.status,
+    'success',
+    `${label} reverted in tx ${hash}; gasUsed=${receipt.gasUsed}`,
+  );
   return receipt;
 }
 
-async function writeAndWait(client, account, functionName, args) {
+function receiptCostLabel(receipt) {
+  const gasPrice = receipt.effectiveGasPrice ?? 0n;
+  const wei = receipt.gasUsed * gasPrice;
+  const eth = Number(wei) / Number(WEI_PER_ETH);
+  const usd = eth * USD_PER_ETH;
+  return `cost=${eth.toFixed(8)} ETH (~$${usd.toFixed(4)} at $${USD_PER_ETH}/ETH)`;
+}
+
+async function writeAndWait(client, account, functionName, args, testContext = null, label = functionName) {
   let hash;
   try {
     hash = await walletClient(account).writeContract({
@@ -209,75 +235,40 @@ async function writeAndWait(client, account, functionName, args) {
       abi: LIVE_ABI,
       functionName,
       args,
+      ...gasOverride({ address: PRIVATE_POKER_CONTRACT_ADDRESS, functionName, args }),
     });
   } catch (error) {
-    throw new Error(`${functionName} transaction was rejected: ${contractErrorSummary(error)}`);
+    throw new Error(`${label} transaction was rejected: ${contractErrorSummary(error)}`);
   }
-  return expectSuccessfulReceipt(client, hash, functionName);
+  return expectSuccessfulReceipt(client, hash, label, testContext);
 }
 
-async function expectCallable(client, account, functionName, args) {
+async function writeVerifierAndWait(client, account, {
+  address,
+  abi,
+  functionName,
+  args,
+  label = functionName,
+  testContext = null,
+}) {
+  let hash;
   try {
-    await client.call({
-      account,
-      to: PRIVATE_POKER_CONTRACT_ADDRESS,
-      data: encodeFunctionData({ abi: LIVE_ABI, functionName, args }),
+    hash = await walletClient(account).writeContract({
+      address,
+      abi,
+      functionName,
+      args,
+      ...gasOverride({ address, functionName, args }),
     });
   } catch (error) {
-    throw new Error(`${functionName} eth_call reverted: ${contractErrorSummary(error)}`);
+    throw new Error(`${label} transaction was rejected: ${contractErrorSummary(error)}`);
   }
+  return expectSuccessfulReceipt(client, hash, label, testContext);
 }
 
-async function expectStandaloneShuffleCallable(client, player, args, testContext) {
-  const [maskedBefore, maskedAfter, publicKey, traces] = args;
-  testContext.diagnostic(
-    `player ${player} shuffle args: maskedBefore=${maskedBefore.length}, maskedAfter=${maskedAfter.length}, traces=${traces.length}, calldataBytes=${encodedCalldataBytes(VERIFY_SHUFFLE_ABI, 'verifyShuffle', args)}`,
-  );
-
-  try {
-    await client.call({
-      to: VERIFY_SHUFFLE_CONTRACT_ADDRESS,
-      data: encodeFunctionData({
-        abi: VERIFY_SHUFFLE_ABI,
-        functionName: 'verifyShuffle',
-        args,
-      }),
-    });
-  } catch (error) {
-    await diagnoseStandaloneShuffleTraceLimit(client, player, args, testContext);
-    throw new Error(
-      `standalone verifyShuffle failed for player ${player}: ${contractErrorSummary(error)}`,
-    );
-  }
-}
-
-async function diagnoseStandaloneShuffleTraceLimit(client, player, args, testContext) {
-  const [maskedBefore, maskedAfter, publicKey, traces] = args;
-  const counts = [1, 2, 4, 8, 16, 32, traces.length]
-    .filter((count, index, values) => count <= traces.length && values.indexOf(count) === index);
-
-  for (const count of counts) {
-    try {
-      await client.call({
-        to: VERIFY_SHUFFLE_CONTRACT_ADDRESS,
-        data: encodeFunctionData({
-          abi: VERIFY_SHUFFLE_ABI,
-          functionName: 'verifyShuffle',
-          args: [maskedBefore, maskedAfter, publicKey, traces.slice(0, count)],
-        }),
-      });
-      testContext.diagnostic(`player ${player} standalone verifyShuffle traces=${count}: ok`);
-    } catch (error) {
-      testContext.diagnostic(
-        `player ${player} standalone verifyShuffle traces=${count}: ${contractErrorSummary(error)}`,
-      );
-    }
-  }
-}
-
-function encodedCalldataBytes(abi, functionName, args) {
-  const data = encodeFunctionData({ abi, functionName, args });
-  return (data.length - 2) / 2;
+function gasOverride(request) {
+  const gas = configuredMaxGas(request);
+  return gas == null ? {} : { gas };
 }
 
 function contractErrorSummary(error) {
@@ -308,7 +299,7 @@ function hexToAscii(data) {
   return /^[\x20-\x7e]+$/.test(text) ? text : null;
 }
 
-test('app verification args submit through the live devnode diamond path', { timeout: 300_000 }, async (t) => {
+test('app verification args submit through standalone live devnode verifier contracts', { timeout: 300_000 }, async (t) => {
   requireDevnode();
 
   const client = publicClient();
@@ -319,13 +310,15 @@ test('app verification args submit through the live devnode diamond path', { tim
   });
   assert.ok(lobbyCount > 0n, 'devnode has no lobbies; deploy contracts and seed a lobby first');
 
-  await Promise.all(ANVIL_ACCOUNTS.map((account) => ensureFunded(client, account)));
+  for (const account of ANVIL_ACCOUNTS) {
+    await ensureFunded(client, account);
+  }
 
   const lobbyId = 1n;
   const tableId = BigInt(Date.now());
-  const handId = 1n;
   const numPlayers = BigInt(ANVIL_ACCOUNTS.length);
-  const { hand, publicKeys, tracesByPlayer } = generateFinishedTwoPlayerHand();
+  const { hand, publicKeys, tracesByPlayer } = generateFinishedHand(ANVIL_ACCOUNTS.length);
+  const unmasking = buildUnmaskingVerificationArgs({ hand });
 
   await writeAndWait(client, ANVIL_ACCOUNTS[0], 'createTable', [
     lobbyId,
@@ -336,16 +329,23 @@ test('app verification args submit through the live devnode diamond path', { tim
     ANVIL_ACCOUNTS[0].address,
     ANVIL_ACCOUNTS[0].address,
     '0x',
-  ]);
-  await writeAndWait(client, ANVIL_ACCOUNTS[1], 'joinTable', [
-    lobbyId,
-    tableId,
-    ANVIL_ACCOUNTS[1].address,
-    ANVIL_ACCOUNTS[1].address,
-    '0x',
-  ]);
-  await writeAndWait(client, ANVIL_ACCOUNTS[0], 'startHand', [lobbyId, tableId]);
-  await writeAndWait(client, ANVIL_ACCOUNTS[1], 'startHand', [lobbyId, tableId]);
+  ], t);
+  for (let player = 1; player < ANVIL_ACCOUNTS.length; player += 1) {
+    await writeAndWait(client, ANVIL_ACCOUNTS[player], 'joinTable', [
+      lobbyId,
+      tableId,
+      ANVIL_ACCOUNTS[player].address,
+      ANVIL_ACCOUNTS[player].address,
+      '0x',
+    ], t, `joinTable player ${player}`);
+  }
+  for (let player = 0; player < ANVIL_ACCOUNTS.length; player += 1) {
+    await writeAndWait(client, ANVIL_ACCOUNTS[player], 'startHand', [lobbyId, tableId], t, `startHand player ${player}`);
+  }
+
+  t.diagnostic(
+    `unmasking args: shuffleHistoryCards=[${unmasking.shuffleHistory.map((deck) => deck.length).join(',')}], unmaskEntries=${unmasking.unmaskingSequenceCards.length}`,
+  );
 
   for (let player = 0; player < ANVIL_ACCOUNTS.length; player += 1) {
     const traces = tracesByPlayer.get(player);
@@ -354,29 +354,39 @@ test('app verification args submit through the live devnode diamond path', { tim
       player,
       publicKey: publicKeys[player],
       traces,
+      shuffleTracesByPlayer: tracesByPlayer,
     });
-    const args = buildSubmitPublicKeyVerificationArgs({
-      lobbyId,
-      tableId,
-      handId,
-      hand,
-      player,
-      publicKey: publicKeys[player],
-      traces,
-    });
-
-    await expectStandaloneShuffleCallable(
-      client,
-      player,
-      [
+    t.diagnostic(
+      `player ${player} shuffle args: maskedBefore=${shuffleArgs.maskedBefore.length}, maskedAfter=${shuffleArgs.maskedAfter.length}, traces=${shuffleArgs.traces.length}`,
+    );
+    await writeVerifierAndWait(client, ANVIL_ACCOUNTS[player], {
+      address: VERIFY_SHUFFLE_CONTRACT_ADDRESS,
+      abi: VERIFY_SHUFFLE_ABI,
+      functionName: 'verifyShuffle',
+      args: [
         shuffleArgs.maskedBefore,
         shuffleArgs.maskedAfter,
         shuffleArgs.publicKey,
         shuffleArgs.traces,
       ],
-      t,
-    );
-    await expectCallable(client, ANVIL_ACCOUNTS[player], 'submitPublicKey', args);
-    await writeAndWait(client, ANVIL_ACCOUNTS[player], 'submitPublicKey', args);
+      label: `verifyShuffle player ${player}`,
+      testContext: t,
+    });
   }
+
+  await writeVerifierAndWait(client, ANVIL_ACCOUNTS[0], {
+    address: VERIFY_UNMASKING_CONTRACT_ADDRESS,
+    abi: VERIFY_UNMASKING_ABI,
+    functionName: 'verifyUnmasking',
+    args: [
+      unmasking.numPlayers,
+      unmasking.playerKeys,
+      unmasking.shuffleHistory,
+      unmasking.unmaskingSequenceCards,
+      unmasking.unmaskingActors,
+      unmasking.unmaskingStates,
+    ],
+    label: 'verifyUnmasking',
+    testContext: t,
+  });
 });

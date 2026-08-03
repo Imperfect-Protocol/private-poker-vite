@@ -31,6 +31,7 @@ import {
 } from '@/lib/crum_pkr';
 import { holdemShowdown } from '@/lib/crum_pkr/hand_evaluator';
 import { useVerifyShuffle } from '@/hooks/useVerifyShuffle';
+import { useVerifyUnmasking } from '@/hooks/useVerifyUnmasking';
 
 const HISTORY_MESSAGE = 'History';
 const CHAT_MESSAGE = 'ChatMessage';
@@ -935,7 +936,8 @@ export function usePokerTable({
   const previousConnectedRef = useRef(false);
   const pendingHistorySyncRef = useRef(false);
   const protocolActionInFlightRef = useRef(null);
-  const onChainPublicKeyInFlightRef = useRef(new Set());
+  const onChainShuffleInFlightRef = useRef(new Set());
+  const onChainUnmaskingInFlightRef = useRef(new Set());
   const debugCheatsRef = useRef({
     badPk: false,
     badShuffle: false,
@@ -946,7 +948,8 @@ export function usePokerTable({
   const lobbyId = table?.lobbyId;
   const tableMaxSeats = table?.tableData?.maxSeats;
   const currentSeatNo = table?.currentSeat?.seatNo;
-  const { submitPublicKeyVerification } = useVerifyShuffle({ onOperatorTopUp });
+  const { verifyShuffle } = useVerifyShuffle({ onOperatorTopUp });
+  const { verifyUnmasking } = useVerifyUnmasking({ onOperatorTopUp });
 
   const senderForSeat = useCallback((seatNo) => {
     const seat = tableSeats[seatNo];
@@ -998,7 +1001,8 @@ export function usePokerTable({
       handKeyHandId: null,
       handKeys: new Map(),
       publicKeySubmissions: new Map(),
-      onChainPublicKeySubmitted: new Set(),
+      onChainShuffleVerified: new Set(),
+      onChainUnmaskingVerified: new Set(),
       currentHandSetup: {
         hand_id: HAND_ID,
         hand_number: HAND_ID,
@@ -1018,7 +1022,8 @@ export function usePokerTable({
     seenHistoryTipsRef.current = new Set();
     previousConnectedRef.current = false;
     pendingHistorySyncRef.current = false;
-    onChainPublicKeyInFlightRef.current = new Set();
+    onChainShuffleInFlightRef.current = new Set();
+    onChainUnmaskingInFlightRef.current = new Set();
     cheatReportRef.current = null;
     setCheatReport(null);
     setTerminalResult(null);
@@ -1342,52 +1347,109 @@ export function usePokerTable({
     }
   }, []);
 
-  const submitOnChainPublicKeyVerification = useCallback(async (game) => {
+  const isWaitingForLaterShuffleTraces = useCallback((error) => (
+    /Missing later shuffle traces|Missing dealt-card trace coverage/i.test(
+      error?.message ?? error?.shortMessage ?? String(error),
+    )
+  ), []);
+
+  const submitOnChainShuffleVerification = useCallback(async (game, submission) => {
     const hand = game?.clientState?.current_hand?.();
-    if (!game || !hand?.get_current_state?.().is_finished?.()) return false;
+    if (!game || !hand || !submission) return false;
 
-    const player = Number(game.clientState.player_index);
+    const player = Number(submission.player);
     const handId = Number(game.clientState.hand_id ?? HAND_ID);
-    const verificationKey = `${lobbyId}:${tableId}:${handId}:${player}`;
+    const verificationKey = `shuffle:${lobbyId}:${tableId}:${handId}:${player}`;
     if (!lobbyId || !tableId || !handId) return false;
-    if (game.onChainPublicKeySubmitted?.has(verificationKey)) return true;
-    if (onChainPublicKeyInFlightRef.current.has(verificationKey)) return false;
+    if (game.onChainShuffleVerified?.has(verificationKey)) return true;
+    if (onChainShuffleInFlightRef.current.has(verificationKey)) return false;
 
-    const submission = game.publicKeySubmissions?.get(player);
     const keys = game.handKeys?.get(handId);
     const traces = submission?.traces
       ?? (game.signingKey ? reconstructShuffleTrace(hand, player, game.signingKey) : null);
     const publicKey = submission?.publicKey ?? game.publicKey ?? hand.player_keys?.[player];
     if (!traces || !publicKey) return false;
 
-    onChainPublicKeyInFlightRef.current.add(verificationKey);
-    appendGameLog(`Submit on-chain public key verification for Player ${player + 1}`);
+    onChainShuffleInFlightRef.current.add(verificationKey);
+    appendGameLog(`Submit on-chain shuffle verification for Player ${player + 1}`);
     try {
-      await submitPublicKeyVerification({
-        lobbyId,
-        tableId,
-        handId,
+      await verifyShuffle({
         hand,
         player,
         publicKey,
         traces,
+        shuffleTracesByPlayer: game.publicKeySubmissions,
         operatorPrivateKey: keys?.operatorPrivateKey,
       });
-      game.onChainPublicKeySubmitted ??= new Set();
-      game.onChainPublicKeySubmitted.add(verificationKey);
-      appendGameLog(`On-chain public key verification submitted for Player ${player + 1}`);
+      game.onChainShuffleVerified ??= new Set();
+      game.onChainShuffleVerified.add(verificationKey);
+      appendGameLog(`On-chain shuffle verification submitted for Player ${player + 1}`);
       return true;
     } catch (error) {
+      if (isWaitingForLaterShuffleTraces(error)) return false;
       appendGameLog(
-        `On-chain public key verification failed: ${error?.shortMessage ?? error?.message ?? error}`,
+        `On-chain shuffle verification failed: ${error?.shortMessage ?? error?.message ?? error}`,
         senderForSeat(player),
         'error',
       );
       return false;
     } finally {
-      onChainPublicKeyInFlightRef.current.delete(verificationKey);
+      onChainShuffleInFlightRef.current.delete(verificationKey);
     }
-  }, [appendGameLog, lobbyId, senderForSeat, submitPublicKeyVerification, tableId]);
+  }, [appendGameLog, isWaitingForLaterShuffleTraces, lobbyId, senderForSeat, tableId, verifyShuffle]);
+
+  const submitPendingOnChainShuffleVerifications = useCallback(async (game) => {
+    const submissions = [...(game?.publicKeySubmissions ?? new Map()).entries()]
+      .map(([player, submission]) => ({
+        player,
+        publicKey: submission?.publicKey,
+        traces: submission?.traces,
+      }));
+    const results = [];
+    for (const submission of submissions) {
+      results.push(await submitOnChainShuffleVerification(game, submission));
+    }
+    return results;
+  }, [submitOnChainShuffleVerification]);
+
+  const submitOnChainUnmaskingVerification = useCallback(async (game) => {
+    const hand = game?.clientState?.current_hand?.();
+    if (!game || !hand?.get_current_state?.().is_finished?.()) return false;
+
+    const handId = Number(game.clientState.hand_id ?? HAND_ID);
+    const verificationKey = `unmasking:${lobbyId}:${tableId}:${handId}`;
+    if (!lobbyId || !tableId || !handId) return false;
+    if (game.onChainUnmaskingVerified?.has(verificationKey)) return true;
+    if (onChainUnmaskingInFlightRef.current.has(verificationKey)) return false;
+
+    const keys = game.handKeys?.get(handId);
+    onChainUnmaskingInFlightRef.current.add(verificationKey);
+    appendGameLog('Submit on-chain unmasking verification');
+    try {
+      await verifyUnmasking({
+        hand,
+        operatorPrivateKey: keys?.operatorPrivateKey,
+      });
+      game.onChainUnmaskingVerified ??= new Set();
+      game.onChainUnmaskingVerified.add(verificationKey);
+      appendGameLog('On-chain unmasking verification submitted');
+      return true;
+    } catch (error) {
+      appendGameLog(
+        `On-chain unmasking verification failed: ${error?.shortMessage ?? error?.message ?? error}`,
+        'Game',
+        'error',
+      );
+      return false;
+    } finally {
+      onChainUnmaskingInFlightRef.current.delete(verificationKey);
+    }
+  }, [appendGameLog, lobbyId, tableId, verifyUnmasking]);
+
+  const submitOnChainFinalVerification = useCallback(async (game) => {
+    await submitPendingOnChainShuffleVerifications(game);
+    return submitOnChainUnmaskingVerification(game);
+  }, [submitOnChainUnmaskingVerification, submitPendingOnChainShuffleVerifications]);
 
   const submitProtocolAction = useCallback(async () => {
     const game = await ensureKeys();
@@ -1400,7 +1462,7 @@ export function usePokerTable({
       if (!game.seenFinished) {
         game.seenFinished = true;
       }
-      await submitOnChainPublicKeyVerification(game);
+      await submitOnChainFinalVerification(game);
       updateView();
       return null;
     }
@@ -1444,8 +1506,9 @@ export function usePokerTable({
           publicKey: built.action.public_key,
           traces: built.action.traces,
         });
+        await submitPendingOnChainShuffleVerifications(game);
         if (hand.get_current_state().current_state === POKER_HAND_STATE_FINISHED) {
-          await submitOnChainPublicKeyVerification(game);
+          await submitOnChainFinalVerification(game);
         }
         game.shuffleTrace = null;
       }
@@ -1460,14 +1523,15 @@ export function usePokerTable({
     ensureKeys,
     submitAction,
     submitNop,
-    submitOnChainPublicKeyVerification,
+    submitOnChainFinalVerification,
+    submitPendingOnChainShuffleVerifications,
     updateView,
   ]);
 
   useEffect(() => {
     if (snapshot.currentGameState?.state !== 'Finished') return;
-    submitOnChainPublicKeyVerification(gameRef.current);
-  }, [snapshot.currentGameState?.state, submitOnChainPublicKeyVerification]);
+    submitOnChainFinalVerification(gameRef.current);
+  }, [snapshot.currentGameState?.state, submitOnChainFinalVerification]);
 
   const startNextHand = useCallback(() => {
     const game = gameRef.current;
@@ -1513,7 +1577,8 @@ export function usePokerTable({
     game.handKeyHandId = null;
     game.shuffleTrace = null;
     game.publicKeySubmissions = new Map();
-    game.onChainPublicKeySubmitted = new Set();
+    game.onChainShuffleVerified = new Set();
+    game.onChainUnmaskingVerified = new Set();
     game.seenFinished = false;
     handHistoryRef.current = [];
     seenHistoryTipsRef.current = new Set();
@@ -1541,7 +1606,8 @@ export function usePokerTable({
     game.handKeyHandId = null;
     game.shuffleTrace = null;
     game.publicKeySubmissions = new Map();
-    game.onChainPublicKeySubmitted = new Set();
+    game.onChainShuffleVerified = new Set();
+    game.onChainUnmaskingVerified = new Set();
     game.seenFinished = false;
     game.currentHandSetup = {
       hand_id: targetHandId,
@@ -1618,6 +1684,17 @@ export function usePokerTable({
       const { applied, result } = appliedResult;
       if (applied) {
         rememberWire(wire, entry);
+        if (wire?.action?.type === 'SubmitPublicKey') {
+          game.publicKeySubmissions ??= new Map();
+          game.publicKeySubmissions.set(wire.action.player, {
+            publicKey: wire.action.public_key,
+            traces: wire.action.traces,
+          });
+          await submitPendingOnChainShuffleVerifications(game);
+          if (game.clientState.current_hand()?.get_current_state?.().is_finished?.()) {
+            await submitOnChainFinalVerification(game);
+          }
+        }
         const displayLines = wire.log_lines?.length > 0
           ? wire.log_lines
           : eventDisplayLines(result?.events);
@@ -1654,6 +1731,8 @@ export function usePokerTable({
     ensureKeys,
     advanceToHistoryHand,
     senderForAddress,
+    submitOnChainFinalVerification,
+    submitPendingOnChainShuffleVerifications,
     updateView,
     verifyHistoryEntrySignature,
   ]);

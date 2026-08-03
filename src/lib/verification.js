@@ -33,10 +33,17 @@ export function buildSubmitPublicKeyVerificationArgs({
   player,
   publicKey,
   traces,
+  shuffleTracesByPlayer,
 }) {
   const playerIndex = Number(player);
   const publicKeyHex = toHexBytes(publicKey);
-  const shuffle = buildShuffleVerificationArgs({ hand, player: playerIndex, publicKey, traces });
+  const shuffle = buildShuffleVerificationArgs({
+    hand,
+    player: playerIndex,
+    publicKey,
+    traces,
+    shuffleTracesByPlayer,
+  });
   const unmasking = buildUnmaskingVerificationArgs({ hand });
 
   return [
@@ -56,7 +63,13 @@ export function buildSubmitPublicKeyVerificationArgs({
   ];
 }
 
-export function buildShuffleVerificationArgs({ hand, player, publicKey, traces }) {
+export function buildShuffleVerificationArgs({
+  hand,
+  player,
+  publicKey,
+  traces,
+  shuffleTracesByPlayer,
+}) {
   if (!hand) throw new Error('Poker hand is required for shuffle verification.');
 
   const numPlayers = Number(hand.current_state?.num_players ?? 0);
@@ -71,12 +84,20 @@ export function buildShuffleVerificationArgs({ hand, player, publicKey, traces }
   if (!previousDeck || !nextDeck) {
     throw new Error(`Missing shuffle history for player ${playerIndex}.`);
   }
+  const compact = compactShuffleProof({
+    hand,
+    player: playerIndex,
+    traces,
+    shuffleTracesByPlayer,
+    previousDeck,
+    nextDeck,
+  });
 
   return {
-    maskedBefore: serializeCards(previousDeck),
-    maskedAfter: serializeCards(nextDeck),
+    maskedBefore: serializeCards(compact.maskedBefore),
+    maskedAfter: serializeCards(compact.maskedAfter),
     publicKey: toHexBytes(publicKey),
-    traces: serializeShuffleTraces(traces),
+    traces: serializeShuffleTraces(compact.traces),
   };
 }
 
@@ -89,11 +110,14 @@ export function buildUnmaskingVerificationArgs({ hand }) {
     if (!key) throw new Error(`Missing public key for player ${index}.`);
     return toHexBytes(key);
   });
+  const dealtCardCount = texasHoldemDealtCardCount(numPlayers);
+  const finalDeck = hand.shuffle_history?.at(-1);
+  if (!finalDeck) throw new Error('Missing final shuffle history for unmasking verification.');
 
   return {
     numPlayers,
     playerKeys,
-    shuffleHistory: (hand.shuffle_history ?? []).map(serializeCards),
+    shuffleHistory: [serializeCards(finalDeck, dealtCardCount)],
     unmaskingSequenceCards: (hand.unmasking_sequence ?? []).map((entry) => (
       serializeUnmaskingEntryCards(entry)
     )),
@@ -102,8 +126,14 @@ export function buildUnmaskingVerificationArgs({ hand }) {
   };
 }
 
-export function serializeCards(cards) {
-  return cards.cards().map(toHexBytes);
+export function texasHoldemDealtCardCount(numPlayers) {
+  return Number(numPlayers) * 2 + 5;
+}
+
+export function serializeCards(cards, count = null) {
+  const cardPoints = Array.isArray(cards) ? cards : cards.cards();
+  const selectedCards = count == null ? cardPoints : cardPoints.slice(0, count);
+  return selectedCards.map(toHexBytes);
 }
 
 export function serializeShuffleTraces(traces = []) {
@@ -118,6 +148,143 @@ function serializeUnmaskingEntryCards(entry) {
   const cards = entry?.[2];
   if (Array.isArray(cards)) return cards.map(serializeCards);
   return [serializeCards(cards)];
+}
+
+function compactShuffleProof({
+  hand,
+  player,
+  traces,
+  shuffleTracesByPlayer,
+  previousDeck,
+  nextDeck,
+}) {
+  const numPlayers = Number(hand.current_state?.num_players ?? 0);
+  const dealer = Number(hand.current_state?.dealer_button ?? 0);
+  const playerIndex = Number(player);
+  const stepIndex = (playerIndex + numPlayers - dealer) % numPlayers;
+  const dealtCardCount = texasHoldemDealtCardCount(numPlayers);
+  const currentTraces = normalizeShuffleTraces(traces);
+  const relevantAfterIndices = relevantAfterIndicesForShuffleStep({
+    numPlayers,
+    dealer,
+    stepIndex,
+    dealtCardCount,
+    traces,
+    shuffleTracesByPlayer,
+  });
+  const selectedTraces = currentTraces
+    .filter((trace) => relevantAfterIndices.has(Number(trace.after_index)))
+    .sort((left, right) => Number(left.after_index) - Number(right.after_index));
+
+  if (selectedTraces.length !== relevantAfterIndices.size) {
+    throw new Error(`Missing dealt-card shuffle traces for player ${playerIndex}.`);
+  }
+
+  const afterIndexByOriginal = new Map();
+  const beforeIndexByOriginal = new Map();
+  const previousCards = previousDeck.cards();
+  const nextCards = nextDeck.cards();
+  const compactAfter = [];
+  const compactBefore = [];
+  const compactTraces = [];
+
+  for (const trace of selectedTraces) {
+    const originalAfterIndex = Number(trace.after_index);
+    const originalBeforeIndex = Number(trace.claimed_before_index);
+
+    if (!afterIndexByOriginal.has(originalAfterIndex)) {
+      afterIndexByOriginal.set(originalAfterIndex, compactAfter.length);
+      compactAfter.push(nextCards[originalAfterIndex]);
+    }
+    if (!beforeIndexByOriginal.has(originalBeforeIndex)) {
+      beforeIndexByOriginal.set(originalBeforeIndex, compactBefore.length);
+      compactBefore.push(previousCards[originalBeforeIndex]);
+    }
+
+    compactTraces.push({
+      after_index: afterIndexByOriginal.get(originalAfterIndex),
+      claimed_before_index: beforeIndexByOriginal.get(originalBeforeIndex),
+    });
+  }
+
+  if (compactBefore.length !== compactAfter.length) {
+    throw new Error(`Duplicate dealt-card shuffle source for player ${playerIndex}.`);
+  }
+
+  return {
+    maskedBefore: compactBefore,
+    maskedAfter: compactAfter,
+    traces: compactTraces,
+  };
+}
+
+function relevantAfterIndicesForShuffleStep({
+  numPlayers,
+  dealer,
+  stepIndex,
+  dealtCardCount,
+  traces,
+  shuffleTracesByPlayer,
+}) {
+  let relevant = new Set(range(dealtCardCount));
+
+  for (let laterStep = numPlayers - 1; laterStep > stepIndex; laterStep -= 1) {
+    const laterPlayer = (dealer + laterStep) % numPlayers;
+    const laterTraces = normalizeShuffleTraces(
+      shuffleTracesForPlayer({
+        player: laterPlayer,
+        currentPlayer: (dealer + stepIndex) % numPlayers,
+        currentTraces: traces,
+        shuffleTracesByPlayer,
+      }),
+    );
+    if (laterTraces.length === 0) {
+      throw new Error(`Missing later shuffle traces for player ${laterPlayer}.`);
+    }
+
+    const nextRelevant = new Set();
+    for (const trace of laterTraces) {
+      if (relevant.has(Number(trace.after_index))) {
+        nextRelevant.add(Number(trace.claimed_before_index));
+      }
+    }
+    if (nextRelevant.size !== relevant.size) {
+      throw new Error(`Missing dealt-card trace coverage for player ${laterPlayer}.`);
+    }
+    relevant = nextRelevant;
+  }
+
+  return relevant;
+}
+
+function shuffleTracesForPlayer({
+  player,
+  currentPlayer,
+  currentTraces,
+  shuffleTracesByPlayer,
+}) {
+  if (Number(player) === Number(currentPlayer)) return currentTraces;
+  if (shuffleTracesByPlayer instanceof Map) {
+    const value = shuffleTracesByPlayer.get(player) ?? shuffleTracesByPlayer.get(String(player));
+    return value?.traces ?? value;
+  }
+  if (Array.isArray(shuffleTracesByPlayer)) {
+    const value = shuffleTracesByPlayer[player];
+    return value?.traces ?? value;
+  }
+  const value = shuffleTracesByPlayer?.[player] ?? shuffleTracesByPlayer?.[String(player)];
+  return value?.traces ?? value;
+}
+
+function normalizeShuffleTraces(traces = []) {
+  return Array.from(traces ?? []).map((trace) => ({
+    after_index: Number(trace?.after_index ?? trace?.[0]),
+    claimed_before_index: Number(trace?.claimed_before_index ?? trace?.[1]),
+  }));
+}
+
+function range(length) {
+  return Array.from({ length }, (_, index) => index);
 }
 
 function toHexBytes(value) {

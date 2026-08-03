@@ -22,5 +22,6 @@ export const CHIPS_CONTRACT_ADDRESS = CHAIN_CONFIG.privatePokerContractAddress;
 export const CASHIER_CONTRACT_ADDRESS = CHAIN_CONFIG.privatePokerContractAddress;
 export const VERIFY_SHUFFLE_CONTRACT_ADDRESS = CHAIN_CONFIG.verifyShuffleContractAddress;
 export const VERIFY_UNMASKING_CONTRACT_ADDRESS = CHAIN_CONFIG.verifyUnmaskingContractAddress;
+export const CHAIN_MAX_GAS = CHAIN_CONFIG.maxGas ?? {};
 export const CHAIN_POLLING_INTERVAL = CHAIN_CONFIG.pollingInterval;
 export const CHAIN_STALE_TIME = CHAIN_CONFIG.staleTime;

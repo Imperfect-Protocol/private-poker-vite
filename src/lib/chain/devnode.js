@@ -2,10 +2,27 @@ export const chainConfig = {
   key: 'devnode',
   chainId: 412_346,
   rpcUrl: '/local-rpc',
-  ppdcContractAddress: '0x0aab0d98f2a0da6f2002da8d3ddb314208341725',
-  privatePokerContractAddress: '0x3bf0f882d0edb6c06cbf0d78684f7464b72fb985',
-  verifyShuffleContractAddress: '0xd01207dd6eb9359f7572f658de0cb4ec98858da5',
-  verifyUnmaskingContractAddress: '0xfb8c3906979fa82ed9e9e18c3ee21995761a13e7',
+  ppdcContractAddress: '0xab8e440727a38bbb180f7032ca4a8009e7b52b80',
+  privatePokerContractAddress: '0xc464c03bfe7efa388457b8b392454b99fa18b124',
+  verifyShuffleContractAddress: '0x1b9cbdc65a7bebb0be7f18d93a1896ea1fd46d7a',
+  verifyUnmaskingContractAddress: '0x841118047f42754332d0ad4db8a2893761dd7f5d',
+  maxGas: {
+    privatePoker: {
+      default: 5_000_000n,
+    },
+    verifyShuffle: {
+      default: {
+        constant: 10_000_000n,
+        perPlayer: 10_000_000n,
+      },
+    },
+    verifyUnmasking: {
+      default: {
+        constant: 8_000_000n,
+        perPlayer: 4_000_000n,
+      },
+    },
+  },
   pollingInterval: 3000,
   staleTime: 5000,
   lastModified: '20260522T161800Z',

@@ -1,13 +1,11 @@
 import { useCallback } from 'react';
 import { useConnection, useWriteContract } from 'wagmi';
-import { PRIVATE_POKER_CONTRACT_ADDRESS, VERIFY_SHUFFLE_CONTRACT_ADDRESS } from '@/lib/chain';
+import { VERIFY_SHUFFLE_CONTRACT_ADDRESS } from '@/lib/chain';
 import { getBufferedGasOverrides } from '@/lib/gas';
 import { publicPokerClient } from '@/lib/publicPokerClient';
 import {
-  HAND_VERIFICATION_ABI,
   VERIFY_SHUFFLE_ABI,
   buildShuffleVerificationArgs,
-  buildSubmitPublicKeyVerificationArgs,
 } from '@/lib/verification';
 import { useOperatorAddress } from '@/hooks/useOperatorAddress';
 
@@ -17,7 +15,7 @@ export function useVerifyShuffle({ onOperatorTopUp } = {}) {
   const { writeContractFromOperator } = useOperatorAddress({ onOperatorTopUp });
 
   const writeContract = useCallback(async ({
-    contract = PRIVATE_POKER_CONTRACT_ADDRESS,
+    contract = VERIFY_SHUFFLE_CONTRACT_ADDRESS,
     abi,
     functionName,
     args,
@@ -52,42 +50,21 @@ export function useVerifyShuffle({ onOperatorTopUp } = {}) {
     });
   }, [address, mutateAsync, writeContractFromOperator]);
 
-  const submitPublicKeyVerification = useCallback(async ({
-    lobbyId,
-    tableId,
-    handId,
-    hand,
-    player,
-    publicKey,
-    traces,
-    operatorPrivateKey,
-  }) => {
-    const args = buildSubmitPublicKeyVerificationArgs({
-      lobbyId,
-      tableId,
-      handId,
-      hand,
-      player,
-      publicKey,
-      traces,
-    });
-
-    return writeContract({
-      abi: HAND_VERIFICATION_ABI,
-      functionName: 'submitPublicKey',
-      args,
-      operatorPrivateKey,
-    });
-  }, [writeContract]);
-
   const verifyShuffle = useCallback(async ({
     hand,
     player,
     publicKey,
     traces,
+    shuffleTracesByPlayer,
     operatorPrivateKey,
   }) => {
-    const args = buildShuffleVerificationArgs({ hand, player, publicKey, traces });
+    const args = buildShuffleVerificationArgs({
+      hand,
+      player,
+      publicKey,
+      traces,
+      shuffleTracesByPlayer,
+    });
     return writeContract({
       contract: VERIFY_SHUFFLE_CONTRACT_ADDRESS,
       abi: VERIFY_SHUFFLE_ABI,
@@ -103,7 +80,6 @@ export function useVerifyShuffle({ onOperatorTopUp } = {}) {
   }, [writeContract]);
 
   return {
-    submitPublicKeyVerification,
     verifyShuffle,
   };
 }
