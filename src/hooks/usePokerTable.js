@@ -30,11 +30,11 @@ import {
   communityCardConsoleLines,
 } from '@/lib/crum_pkr';
 import { holdemShowdown } from '@/lib/crum_pkr/hand_evaluator';
-import { useVerifyShuffle } from '@/hooks/useVerifyShuffle';
-import { useVerifyUnmasking } from '@/hooks/useVerifyUnmasking';
+import { buildFinalHandSettlement, useFinalVerification } from '@/hooks/useFinalVerification';
 
 const HISTORY_MESSAGE = 'History';
 const CHAT_MESSAGE = 'ChatMessage';
+const FINAL_VERIFICATION_MESSAGE = 'FinalVerification';
 const ACTION_SIGNATURE_SCHEME = 'BLS12-381-G1-PK-G2-SIG';
 const BETTING_UI_STATES = new Set(['PreFlop', 'Flop', 'Turn', 'River']);
 const BAD_UNMASK_G1 = G1.BASE.toRawBytes(true);
@@ -523,7 +523,7 @@ function eventDisplayLine(event) {
     case 'hand_ended':
       return `Hand Ended; Player ${seat} submits public key first`;
     case 'hand_result':
-      return `Hand Result: Player ${seat} pot $${event.pot_size}`;
+      return 'Hand result pending final settlement';
     default:
       return null;
   }
@@ -572,7 +572,26 @@ function gameStateName(pokerState) {
   return pokerState.type;
 }
 
-function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null) {
+function playerCompletedFinalSettlement(game, playerIndex) {
+  return (game?.finalVerificationSignatureShares ?? []).some((share) => (
+    Number(share?.signer_seat) === Number(playerIndex)
+  ));
+}
+
+function settlementWinnerIndex(settlement, tableSeats = []) {
+  const payouts = settlement?.pot_size_per_player ?? [];
+  const payoutWinner = payouts.findIndex((amount) => Number(amount) > 0);
+  if (payoutWinner >= 0) return payoutWinner;
+
+  const winnerAddress = settlement?.winner_player_address?.toLowerCase?.();
+  if (!winnerAddress) return null;
+  const addressWinner = tableSeats.findIndex((seat) => (
+    seat?.playerAddress?.toLowerCase?.() === winnerAddress
+  ));
+  return addressWinner >= 0 ? addressWinner : null;
+}
+
+function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null, tableSeats = []) {
   const hand = game?.clientState.current_hand();
   const viewerPlayerIndex = viewerSeatNo ?? game?.clientState.player_index ?? 0;
   if (!game || !hand) {
@@ -629,6 +648,7 @@ function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null) {
 
   if (isShowdownState) {
     const activePlayers = hand.betting_state?.active_players ?? [];
+    const finalSettlementComplete = playerCompletedFinalSettlement(game, viewerPlayerIndex);
     const playerCards = hand.get_player_cards().map((cardSet, player) => {
       if (activePlayers[player] === false) return [];
       try {
@@ -637,38 +657,28 @@ function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null) {
         return [];
       }
     });
-    const communityCards = [];
-    for (let round = 0; round < POKER_HOLDEM_ROUNDS; round += 1) {
-      const cards = hand.get_community_cards(round);
-      if (cards) {
-        communityCards.push(...cardsToStrings(deck.unmasked_cards(cards)));
-      }
-    }
     const allInPlayers = hand.betting_state?.allin_players ?? [];
     const payoutAmount = Number(hand.betting_state?.pot?.toString?.() ?? 0);
-    const foldedWinner = activePlayers.filter(Boolean).length === 1
-      ? activePlayers.findIndex(Boolean)
-      : null;
-    const showdown = foldedWinner == null
-      ? holdemShowdown(playerCards, communityCards, activePlayers)
-      : {
-        hands: playerCards.map(() => ({
-          cards: [],
-          rank: null,
-        })),
-        winner: foldedWinner,
-      };
-    const hands = showdown.hands.map((showdownHand, index) => ({
-      ...showdownHand,
-      isWinner: showdown.winner === index,
+    const settlement = finalSettlementComplete ? game.finalHandSettlement : null;
+    const settlementWinner = settlementWinnerIndex(settlement, tableSeats);
+    const settlementPayout = settlementWinner == null
+      ? 0
+      : Number(settlement?.pot_size_per_player?.[settlementWinner] ?? 0);
+    const hands = playerCards.map((cards, index) => ({
+      cards,
+      rank: null,
+      isWinner: finalSettlementComplete && settlementWinner === index,
     }));
-    const playerWon = showdown.winner != null && showdown.winner === viewerPlayerIndex;
-    const stacks = chipStacks(hand, showdown.winner, showdown.winner == null ? 0 : payoutAmount);
+    const playerWon = settlementWinner != null && settlementWinner === viewerPlayerIndex;
+    const stacks = finalSettlementComplete
+      ? settlement?.chips_balances ?? chipStacks(hand)
+      : chipStacks(hand);
+    const revealedWinner = finalSettlementComplete ? settlementWinner : null;
 
     return {
-      state: 'Showdown',
+      state: pokerState.type === 'Finished' && !finalSettlementComplete ? 'FinalSettlement' : 'Showdown',
       seat,
-      canStartNextHand: pokerState.type === 'Finished',
+      canStartNextHand: finalSettlementComplete && pokerState.type === 'Finished',
       pot: payoutAmount,
       minBet: safeCallAmount(hand, viewerPlayerIndex),
       maxBet: safeChipsRemaining(hand, viewerPlayerIndex),
@@ -676,15 +686,15 @@ function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null) {
       chipStacks: stacks,
       chipStackSizes: chipStackSizes(stacks),
       hands,
-      winner: showdown.winner,
-      resultText: showdown.winner == null ? null : playerWon ? 'You Win' : 'You Lose',
-      resultRank: showdown.winner == null ? null : hands[showdown.winner]?.rank ?? null,
-      resultWinner: showdown.winner,
-      payout: showdown.winner == null
+      winner: revealedWinner,
+      resultText: revealedWinner == null ? null : playerWon ? 'You Win' : 'You Lose',
+      resultRank: null,
+      resultWinner: revealedWinner,
+      payout: revealedWinner == null
         ? null
         : {
-          amount: payoutAmount,
-          winner: showdown.winner,
+          amount: settlementPayout,
+          winner: revealedWinner,
           icon: 'coins',
         },
       activePlayers,
@@ -892,7 +902,6 @@ export function usePokerTable({
   publishMessage,
   prepareNetworkSession,
   prepareHandSession,
-  onOperatorTopUp,
 } = {}) {
   const [snapshot, setSnapshot] = useState({
     started: false,
@@ -936,8 +945,7 @@ export function usePokerTable({
   const previousConnectedRef = useRef(false);
   const pendingHistorySyncRef = useRef(false);
   const protocolActionInFlightRef = useRef(null);
-  const onChainShuffleInFlightRef = useRef(new Set());
-  const onChainUnmaskingInFlightRef = useRef(new Set());
+  const finalVerificationInFlightRef = useRef(false);
   const debugCheatsRef = useRef({
     badPk: false,
     badShuffle: false,
@@ -948,8 +956,7 @@ export function usePokerTable({
   const lobbyId = table?.lobbyId;
   const tableMaxSeats = table?.tableData?.maxSeats;
   const currentSeatNo = table?.currentSeat?.seatNo;
-  const { verifyShuffle } = useVerifyShuffle({ onOperatorTopUp });
-  const { verifyUnmasking } = useVerifyUnmasking({ onOperatorTopUp });
+  const { buildNextFinalVerification, submitFinalHandOnChain } = useFinalVerification();
 
   const senderForSeat = useCallback((seatNo) => {
     const seat = tableSeats[seatNo];
@@ -1001,8 +1008,10 @@ export function usePokerTable({
       handKeyHandId: null,
       handKeys: new Map(),
       publicKeySubmissions: new Map(),
-      onChainShuffleVerified: new Set(),
-      onChainUnmaskingVerified: new Set(),
+      finalVerificationSignatureShares: [],
+      finalVerificationDigest: null,
+      finalHandSettlement: null,
+      finalVerificationSubmitted: false,
       currentHandSetup: {
         hand_id: HAND_ID,
         hand_number: HAND_ID,
@@ -1022,8 +1031,7 @@ export function usePokerTable({
     seenHistoryTipsRef.current = new Set();
     previousConnectedRef.current = false;
     pendingHistorySyncRef.current = false;
-    onChainShuffleInFlightRef.current = new Set();
-    onChainUnmaskingInFlightRef.current = new Set();
+    finalVerificationInFlightRef.current = false;
     cheatReportRef.current = null;
     setCheatReport(null);
     setTerminalResult(null);
@@ -1036,7 +1044,7 @@ export function usePokerTable({
 
     const viewerSeatNo = currentSeatNo ?? null;
     const patch = tableViewPatch(game.clientState, game.signingKey, viewerSeatNo);
-    const currentGameState = currentGameStateFrom(game, viewerSeatNo, cheatReportRef.current);
+    const currentGameState = currentGameStateFrom(game, viewerSeatNo, cheatReportRef.current, tableSeats);
     const protocolActionState = protocolActionStateFrom(game);
     const nextCurrentGameState = !force && shallowEqual(
       lastSnapshotRef.current.currentGameState,
@@ -1061,7 +1069,7 @@ export function usePokerTable({
       setSnapshot(nextSnapshot);
     }
     return nextSnapshot;
-  }, [currentSeatNo]);
+  }, [currentSeatNo, tableSeats]);
 
   const ensureKeys = useCallback(async (handNumber = null) => {
     const game = gameRef.current ?? resetGame();
@@ -1347,109 +1355,88 @@ export function usePokerTable({
     }
   }, []);
 
-  const isWaitingForLaterShuffleTraces = useCallback((error) => (
-    /Missing later shuffle traces|Missing dealt-card trace coverage/i.test(
-      error?.message ?? error?.shortMessage ?? String(error),
-    )
-  ), []);
+  const publishFinalVerificationMessage = useCallback((game, finalVerification) => {
+    publishMessage({
+      type: FINAL_VERIFICATION_MESSAGE,
+      lobby_id: lobbyId?.toString?.() ?? String(lobbyId ?? ''),
+      table_id: tableId?.toString?.() ?? String(tableId ?? ''),
+      hand_id: game?.clientState?.hand_id,
+      hand_number: game?.clientState?.hand_id,
+      hand_setup: game?.currentHandSetup ?? null,
+      hand_history: [...(handHistoryRef.current ?? [])],
+      final_hand_digest: finalVerification.finalHandDigest,
+      settlement_digest: finalVerification.settlementDigest,
+      signature_shares: finalVerification.signatureShares,
+      signer_seats: finalVerification.signerSeats,
+      aggregate_signature: finalVerification.aggregateSignature,
+      aggregate_public_key: finalVerification.aggregatePublicKey,
+      settlement: finalVerification.settlementMessage ?? null,
+    });
+  }, [lobbyId, publishMessage, tableId]);
 
-  const submitOnChainShuffleVerification = useCallback(async (game, submission) => {
-    const hand = game?.clientState?.current_hand?.();
-    if (!game || !hand || !submission) return false;
-
-    const player = Number(submission.player);
-    const handId = Number(game.clientState.hand_id ?? HAND_ID);
-    const verificationKey = `shuffle:${lobbyId}:${tableId}:${handId}:${player}`;
-    if (!lobbyId || !tableId || !handId) return false;
-    if (game.onChainShuffleVerified?.has(verificationKey)) return true;
-    if (onChainShuffleInFlightRef.current.has(verificationKey)) return false;
-
-    const keys = game.handKeys?.get(handId);
-    const traces = submission?.traces
-      ?? (game.signingKey ? reconstructShuffleTrace(hand, player, game.signingKey) : null);
-    const publicKey = submission?.publicKey ?? game.publicKey ?? hand.player_keys?.[player];
-    if (!traces || !publicKey) return false;
-
-    onChainShuffleInFlightRef.current.add(verificationKey);
-    appendGameLog(`Submit on-chain shuffle verification for Player ${player + 1}`);
-    try {
-      await verifyShuffle({
-        hand,
-        player,
-        publicKey,
-        traces,
-        shuffleTracesByPlayer: game.publicKeySubmissions,
-        operatorPrivateKey: keys?.operatorPrivateKey,
-      });
-      game.onChainShuffleVerified ??= new Set();
-      game.onChainShuffleVerified.add(verificationKey);
-      appendGameLog(`On-chain shuffle verification submitted for Player ${player + 1}`);
-      return true;
-    } catch (error) {
-      if (isWaitingForLaterShuffleTraces(error)) return false;
-      appendGameLog(
-        `On-chain shuffle verification failed: ${error?.shortMessage ?? error?.message ?? error}`,
-        senderForSeat(player),
-        'error',
-      );
-      return false;
-    } finally {
-      onChainShuffleInFlightRef.current.delete(verificationKey);
-    }
-  }, [appendGameLog, isWaitingForLaterShuffleTraces, lobbyId, senderForSeat, tableId, verifyShuffle]);
-
-  const submitPendingOnChainShuffleVerifications = useCallback(async (game) => {
-    const submissions = [...(game?.publicKeySubmissions ?? new Map()).entries()]
-      .map(([player, submission]) => ({
-        player,
-        publicKey: submission?.publicKey,
-        traces: submission?.traces,
-      }));
-    const results = [];
-    for (const submission of submissions) {
-      results.push(await submitOnChainShuffleVerification(game, submission));
-    }
-    return results;
-  }, [submitOnChainShuffleVerification]);
-
-  const submitOnChainUnmaskingVerification = useCallback(async (game) => {
+  const submitFinalVerificationRound = useCallback(async (game, incomingSignatureShares = null) => {
     const hand = game?.clientState?.current_hand?.();
     if (!game || !hand?.get_current_state?.().is_finished?.()) return false;
+    if (finalVerificationInFlightRef.current) return false;
 
-    const handId = Number(game.clientState.hand_id ?? HAND_ID);
-    const verificationKey = `unmasking:${lobbyId}:${tableId}:${handId}`;
-    if (!lobbyId || !tableId || !handId) return false;
-    if (game.onChainUnmaskingVerified?.has(verificationKey)) return true;
-    if (onChainUnmaskingInFlightRef.current.has(verificationKey)) return false;
-
-    const keys = game.handKeys?.get(handId);
-    onChainUnmaskingInFlightRef.current.add(verificationKey);
-    appendGameLog('Submit on-chain unmasking verification');
+    finalVerificationInFlightRef.current = true;
     try {
-      await verifyUnmasking({
+      const signatureShares = incomingSignatureShares ?? game.finalVerificationSignatureShares ?? [];
+      const finalVerification = buildNextFinalVerification({
+        lobbyId,
+        tableId,
+        handId: game.clientState.hand_id ?? HAND_ID,
         hand,
-        operatorPrivateKey: keys?.operatorPrivateKey,
+        handSetup: game.currentHandSetup,
+        handHistoryEntries: handHistoryRef.current,
+        tableSeats,
+        settlement: buildFinalHandSettlement(hand, tableSeats),
+        signatureShares,
+        currentSeatNo: game.clientState.player_index,
+        signingKey: game.signingKey,
+        publicKey: game.publicKey,
       });
-      game.onChainUnmaskingVerified ??= new Set();
-      game.onChainUnmaskingVerified.add(verificationKey);
-      appendGameLog('On-chain unmasking verification submitted');
+
+      game.finalVerificationSignatureShares = finalVerification.signatureShares;
+      game.finalVerificationDigest = finalVerification.finalHandDigest;
+      if (playerCompletedFinalSettlement(game, game.clientState.player_index)) {
+        game.finalHandSettlement = finalVerification.settlementMessage;
+      }
+
+      if (!finalVerification.signed) return false;
+
+      appendGameLog(
+        `Final verification signed by Player ${game.clientState.player_index + 1}`,
+        senderForSeat(game.clientState.player_index),
+      );
+      publishFinalVerificationMessage(game, finalVerification);
+
+      if (finalVerification.complete && !game.finalVerificationSubmitted) {
+        game.finalVerificationSubmitted = true;
+        submitFinalHandOnChain(finalVerification);
+        appendGameLog('Final hand settlement ready for on-chain submit');
+      }
       return true;
     } catch (error) {
       appendGameLog(
-        `On-chain unmasking verification failed: ${error?.shortMessage ?? error?.message ?? error}`,
+        `Final verification failed: ${error?.shortMessage ?? error?.message ?? error}`,
         'Game',
         'error',
       );
       return false;
     } finally {
-      onChainUnmaskingInFlightRef.current.delete(verificationKey);
+      finalVerificationInFlightRef.current = false;
     }
-  }, [appendGameLog, lobbyId, tableId, verifyUnmasking]);
-
-  const submitOnChainFinalVerification = useCallback(async (game) => {
-    await submitPendingOnChainShuffleVerifications(game);
-    return submitOnChainUnmaskingVerification(game);
-  }, [submitOnChainUnmaskingVerification, submitPendingOnChainShuffleVerifications]);
+  }, [
+    appendGameLog,
+    buildNextFinalVerification,
+    lobbyId,
+    publishFinalVerificationMessage,
+    senderForSeat,
+    submitFinalHandOnChain,
+    tableId,
+    tableSeats,
+  ]);
 
   const submitProtocolAction = useCallback(async () => {
     const game = await ensureKeys();
@@ -1462,7 +1449,7 @@ export function usePokerTable({
       if (!game.seenFinished) {
         game.seenFinished = true;
       }
-      await submitOnChainFinalVerification(game);
+      await submitFinalVerificationRound(game);
       updateView();
       return null;
     }
@@ -1506,9 +1493,8 @@ export function usePokerTable({
           publicKey: built.action.public_key,
           traces: built.action.traces,
         });
-        await submitPendingOnChainShuffleVerifications(game);
         if (hand.get_current_state().current_state === POKER_HAND_STATE_FINISHED) {
-          await submitOnChainFinalVerification(game);
+          await submitFinalVerificationRound(game);
         }
         game.shuffleTrace = null;
       }
@@ -1523,15 +1509,14 @@ export function usePokerTable({
     ensureKeys,
     submitAction,
     submitNop,
-    submitOnChainFinalVerification,
-    submitPendingOnChainShuffleVerifications,
+    submitFinalVerificationRound,
     updateView,
   ]);
 
   useEffect(() => {
     if (snapshot.currentGameState?.state !== 'Finished') return;
-    submitOnChainFinalVerification(gameRef.current);
-  }, [snapshot.currentGameState?.state, submitOnChainFinalVerification]);
+    submitFinalVerificationRound(gameRef.current);
+  }, [snapshot.currentGameState?.state, submitFinalVerificationRound]);
 
   const startNextHand = useCallback(() => {
     const game = gameRef.current;
@@ -1577,12 +1562,15 @@ export function usePokerTable({
     game.handKeyHandId = null;
     game.shuffleTrace = null;
     game.publicKeySubmissions = new Map();
-    game.onChainShuffleVerified = new Set();
-    game.onChainUnmaskingVerified = new Set();
+    game.finalVerificationSignatureShares = [];
+    game.finalVerificationDigest = null;
+    game.finalHandSettlement = null;
+    game.finalVerificationSubmitted = false;
     game.seenFinished = false;
     handHistoryRef.current = [];
     seenHistoryTipsRef.current = new Set();
     protocolActionInFlightRef.current = null;
+    finalVerificationInFlightRef.current = false;
 
     const events = game.clientState.table.drain_events?.() ?? [];
     appendTraceLines(eventDisplayLines(events), game.clientState.player_index);
@@ -1606,8 +1594,10 @@ export function usePokerTable({
     game.handKeyHandId = null;
     game.shuffleTrace = null;
     game.publicKeySubmissions = new Map();
-    game.onChainShuffleVerified = new Set();
-    game.onChainUnmaskingVerified = new Set();
+    game.finalVerificationSignatureShares = [];
+    game.finalVerificationDigest = null;
+    game.finalHandSettlement = null;
+    game.finalVerificationSubmitted = false;
     game.seenFinished = false;
     game.currentHandSetup = {
       hand_id: targetHandId,
@@ -1619,6 +1609,7 @@ export function usePokerTable({
     handHistoryRef.current = [];
     seenHistoryTipsRef.current = new Set();
     protocolActionInFlightRef.current = null;
+    finalVerificationInFlightRef.current = false;
     await ensureKeys(targetHandId);
     updateView({ force: true });
     return true;
@@ -1690,9 +1681,8 @@ export function usePokerTable({
             publicKey: wire.action.public_key,
             traces: wire.action.traces,
           });
-          await submitPendingOnChainShuffleVerifications(game);
           if (game.clientState.current_hand()?.get_current_state?.().is_finished?.()) {
-            await submitOnChainFinalVerification(game);
+            await submitFinalVerificationRound(game);
           }
         }
         const displayLines = wire.log_lines?.length > 0
@@ -1731,8 +1721,7 @@ export function usePokerTable({
     ensureKeys,
     advanceToHistoryHand,
     senderForAddress,
-    submitOnChainFinalVerification,
-    submitPendingOnChainShuffleVerifications,
+    submitFinalVerificationRound,
     updateView,
     verifyHistoryEntrySignature,
   ]);
@@ -1788,6 +1777,7 @@ export function usePokerTable({
     if (
       message?.type !== HISTORY_MESSAGE
       && message?.type !== CHAT_MESSAGE
+      && message?.type !== FINAL_VERIFICATION_MESSAGE
     ) return false;
 
     if (message.type === CHAT_MESSAGE) {
@@ -1806,6 +1796,12 @@ export function usePokerTable({
     if (handHistory.length > 0) {
       const appliedHistory = await applyHistoryEntries(handHistory, playerAddress, message.hand_setup);
       if (!appliedHistory) return true;
+    }
+
+    if (message.type === FINAL_VERIFICATION_MESSAGE) {
+      await submitFinalVerificationRound(game, message.signature_shares ?? []);
+      updateView({ force: true });
+      return true;
     }
 
     const wire = decodeWire(message.wire);
@@ -1853,6 +1849,7 @@ export function usePokerTable({
       const hand = game.clientState.current_hand();
       const handState = hand?.get_current_state();
       if (handState?.is_finished()) {
+        await submitFinalVerificationRound(game);
         updateView({ force: true });
         return true;
       }
@@ -1869,6 +1866,7 @@ export function usePokerTable({
     ensureKeys,
     resetGame,
     senderForAddress,
+    submitFinalVerificationRound,
     updateView,
   ]);
 

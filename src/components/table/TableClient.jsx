@@ -50,6 +50,9 @@ const rtcMessageLabels = (message) => {
     }
     return [submitConsoleLine(lastHistoryEntry?.wire?.submit ?? message.wire?.submit) ?? 'History'];
   }
+  if (message.type === 'FinalVerification') {
+    return [`Final settlement signatures: ${message.signer_seats?.length ?? message.signature_shares?.length ?? 0}`];
+  }
   return [message.type];
 };
 
@@ -62,6 +65,7 @@ const POKER_PROTOCOL_UI_STATES = new Set([
   'UnmaskRiver',
   'UnmaskShowdown',
   'SubmitPublicKey',
+  'FinalSettlement',
   'Finished',
   'PreFlop',
   'Flop',
@@ -117,6 +121,7 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
     if (
       incoming?.type === 'History'
       || incoming?.type === 'ChatMessage'
+      || incoming?.type === 'FinalVerification'
     ) {
       pokerTableRef.current?.handleNetworkMessage(incoming, playerAddress);
       return;
