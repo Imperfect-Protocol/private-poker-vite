@@ -55,7 +55,6 @@ export function useNetwork({
   tableDetails,
   seats = [],
   onActivity,
-  onOperatorTopUp,
   isTableFull = false,
   tableCapacity = 0,
   localMediaStream = null,

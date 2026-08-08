@@ -1,3 +1,5 @@
+/* global process */
+
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -48,6 +50,21 @@ export default defineConfig({
       'NEXT_PUBLIC_PRIVATE_POKER_CHAIN',
       'PUBLIC_PRIVATE_POKER_CHAIN',
       'VITE_PRIVATE_POKER_CHAIN',
+    ),
+    'process.env.NEXT_PUBLIC_PRIVATE_POKER_MESH': envValue(
+      'NEXT_PUBLIC_PRIVATE_POKER_MESH',
+      'PUBLIC_PRIVATE_POKER_MESH',
+      'VITE_PRIVATE_POKER_MESH',
+    ),
+    'process.env.PUBLIC_PRIVATE_POKER_MESH': envValue(
+      'PUBLIC_PRIVATE_POKER_MESH',
+      'NEXT_PUBLIC_PRIVATE_POKER_MESH',
+      'VITE_PRIVATE_POKER_MESH',
+    ),
+    'process.env.VITE_PRIVATE_POKER_MESH': envValue(
+      'VITE_PRIVATE_POKER_MESH',
+      'NEXT_PUBLIC_PRIVATE_POKER_MESH',
+      'PUBLIC_PRIVATE_POKER_MESH',
     ),
     'process.env.NEXT_PUBLIC_PRIVATE_MESH_ENDPOINTS': envValue(
       'NEXT_PUBLIC_PRIVATE_MESH_ENDPOINTS',

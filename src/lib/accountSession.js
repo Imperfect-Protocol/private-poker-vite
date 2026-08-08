@@ -1,7 +1,7 @@
 import { keccak256, toBytes, toHex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import * as bls from '@noble/bls12-381';
 import { BLS_TABLE_SESSION_DOMAIN, BLS_TABLE_SESSION_TYPES } from '@/lib/constants';
+import { compressed_public_key_hex_from_seed } from '@/lib/crum_bls';
 
 export const ACCOUNT_SESSION_CHANNEL = 'private-poker:account-session';
 
@@ -43,7 +43,7 @@ export function deriveAccountSession(signature, walletAddress) {
   const rootSeed = keccak256(signature);
   const blsSeed = keccak256(toBytes(`${rootSeed}:PrivatePoker:BLSRoot`));
   const operatorBlsPrivateKey = keccak256(toBytes(`${rootSeed}:PrivatePoker:OperatorBLSProfile`));
-  const operatorBlsPublicKey = toHex(bls.getPublicKey(toBytes(operatorBlsPrivateKey)));
+  const operatorBlsPublicKey = compressed_public_key_hex_from_seed(toBytes(operatorBlsPrivateKey), { prefix: true });
   const operatorPrivateKey = keccak256(toBytes(`${rootSeed}:PrivatePoker:Operator`));
   const operatorAccount = privateKeyToAccount(operatorPrivateKey);
 
@@ -60,6 +60,14 @@ export function deriveAccountSession(signature, walletAddress) {
   };
 }
 
+function isCrumBlsPublicKeyHex(value) {
+  try {
+    return toBytes(value).length === 96;
+  } catch {
+    return false;
+  }
+}
+
 export function parseAccountSession(rawSession) {
   if (!rawSession) return null;
   try {
@@ -70,10 +78,13 @@ export function parseAccountSession(rawSession) {
     if (!session.blsSeed) {
       session.blsSeed = keccak256(toBytes(`${session.rootSeed}:PrivatePoker:BLSRoot`));
     }
+    if (session.operatorBlsPublicKey && !isCrumBlsPublicKeyHex(session.operatorBlsPublicKey)) {
+      return null;
+    }
     if (!session.operatorBlsPrivateKey || !session.operatorBlsPublicKey) {
       const operatorBlsPrivateKey = keccak256(toBytes(`${session.rootSeed}:PrivatePoker:OperatorBLSProfile`));
       session.operatorBlsPrivateKey = operatorBlsPrivateKey.slice(2);
-      session.operatorBlsPublicKey = toHex(bls.getPublicKey(toBytes(operatorBlsPrivateKey)));
+      session.operatorBlsPublicKey = compressed_public_key_hex_from_seed(toBytes(operatorBlsPrivateKey), { prefix: true });
     }
     return session;
   } catch {
@@ -105,11 +116,10 @@ export async function deriveTableSessionKeys(accountSession, tableDetails, sessi
   const tableSignature = await operatorAccount.signTypedData(buildTableSessionTypedData(tableDetails));
   const privateKeySeed = keccak256(toBytes(`${accountSession.blsSeed}:${tableSignature}`));
   const privateKeyBytes = toBytes(privateKeySeed);
-  const publicKeyBytes = bls.getPublicKey(privateKeyBytes);
 
   return {
     privateKey: toHex(privateKeyBytes).slice(2),
-    publicKey: toHex(publicKeyBytes).slice(2),
+    publicKey: compressed_public_key_hex_from_seed(privateKeyBytes),
     operatorPrivateKey: accountSession.operatorPrivateKey,
     operatorPublicKey: accountSession.operatorPublicKey,
     operator: accountSession.operator,
@@ -137,11 +147,10 @@ export function deriveHandSessionKeys(accountSession, tableDetails, handNumber) 
     handNumber,
   ].join(':')));
   const privateKeyBytes = toBytes(privateKeySeed);
-  const publicKeyBytes = bls.getPublicKey(privateKeyBytes);
 
   return {
     privateKey: toHex(privateKeyBytes).slice(2),
-    publicKey: toHex(publicKeyBytes).slice(2),
+    publicKey: compressed_public_key_hex_from_seed(privateKeyBytes),
     operatorPrivateKey: accountSession.operatorPrivateKey,
     operatorPublicKey: accountSession.operatorPublicKey,
     operator: accountSession.operator,

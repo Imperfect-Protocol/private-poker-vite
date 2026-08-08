@@ -1,6 +1,6 @@
 import { privateKeyToAccount } from 'viem/accounts';
-import { getBufferedGasOverrides } from '@/lib/gas';
-import { createPokerWalletClient, publicPokerClient } from '@/lib/publicPokerClient';
+import { getBufferedGasOverrides } from './gas.js';
+import { createPokerWalletClient, publicPokerClient } from './publicPokerClient.js';
 
 const operatorWriteQueues = new Map();
 const NONCE_RETRY_DELAY_MS = 350;

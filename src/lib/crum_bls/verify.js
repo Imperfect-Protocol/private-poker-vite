@@ -1,5 +1,6 @@
 import { bls, Fp12, G2 } from './curves.js';
 import { hash_to_curve } from './hash_to_curve.js';
+import { digest_to_g1 } from './sign.js';
 
 function pairingProductIsIdentity(pairs) {
   let product = Fp12.ONE;
@@ -11,6 +12,14 @@ function pairingProductIsIdentity(pairs) {
 
 export function verify(message, pk, sig) {
   const h = hash_to_curve(message);
+  return pairingProductIsIdentity([
+    [sig, G2.BASE],
+    [h, pk.negate()],
+  ]);
+}
+
+export function verify_digest(digest, pk, sig) {
+  const h = digest_to_g1(digest);
   return pairingProductIsIdentity([
     [sig, G2.BASE],
     [h, pk.negate()],

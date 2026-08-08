@@ -35,7 +35,8 @@ import { buildFinalHandSettlement, useFinalVerification } from '@/hooks/useFinal
 const HISTORY_MESSAGE = 'History';
 const CHAT_MESSAGE = 'ChatMessage';
 const FINAL_VERIFICATION_MESSAGE = 'FinalVerification';
-const ACTION_SIGNATURE_SCHEME = 'BLS12-381-G1-PK-G2-SIG';
+const TABLE_AGGREGATE_PUBLIC_KEY_MESSAGE = 'TableAggregatePublicKey';
+const ACTION_SIGNATURE_SCHEME = 'BLS12-381-G2-PK-G1-SIG';
 const BETTING_UI_STATES = new Set(['PreFlop', 'Flop', 'Turn', 'River']);
 const BAD_UNMASK_G1 = G1.BASE.toRawBytes(true);
 const textEncoder = new TextEncoder();
@@ -902,6 +903,7 @@ export function usePokerTable({
   publishMessage,
   prepareNetworkSession,
   prepareHandSession,
+  onOperatorTopUp,
 } = {}) {
   const [snapshot, setSnapshot] = useState({
     started: false,
@@ -956,7 +958,12 @@ export function usePokerTable({
   const lobbyId = table?.lobbyId;
   const tableMaxSeats = table?.tableData?.maxSeats;
   const currentSeatNo = table?.currentSeat?.seatNo;
-  const { buildNextFinalVerification, submitFinalHandOnChain } = useFinalVerification();
+  const {
+    buildNextFinalVerification,
+    buildNextTableAggregatePublicKeyVerification,
+    setTableAggregatePublicKeyOnChain,
+    submitFinalHandOnChain,
+  } = useFinalVerification({ onOperatorTopUp });
 
   const senderForSeat = useCallback((seatNo) => {
     const seat = tableSeats[seatNo];
@@ -1005,9 +1012,17 @@ export function usePokerTable({
       clientState,
       signingKey: null,
       publicKey: null,
+      tableSigningKey: null,
+      tablePublicKey: null,
+      tableKeys: null,
       handKeyHandId: null,
       handKeys: new Map(),
       publicKeySubmissions: new Map(),
+      tableAggregatePublicKeySubmitted: false,
+      tableAggregatePublicKeyPromise: null,
+      tableAggregatePublicKey: null,
+      tableAggregatePublicKeySignatureShares: [],
+      tableAggregatePublicKeyDigest: null,
       finalVerificationSignatureShares: [],
       finalVerificationDigest: null,
       finalHandSettlement: null,
@@ -1078,35 +1093,157 @@ export function usePokerTable({
     if (
       game.signingKey
       && game.publicKey
+      && game.tableSigningKey
+      && game.tablePublicKey
       && Number(game.handKeyHandId) === targetHandNumber
     ) return game;
     if (currentSeatNo == null || (!prepareHandSession && !prepareNetworkSession)) return null;
 
+    const tableKeys = game.tableKeys
+      ?? (prepareNetworkSession ? await prepareNetworkSession() : null);
     const cachedKeys = game.handKeys?.get(targetHandNumber);
     const keys = cachedKeys
       ?? (prepareHandSession
         ? await prepareHandSession(targetHandNumber)
-        : await prepareNetworkSession());
+        : tableKeys);
     if (!cachedKeys) {
       const handKeys = game.handKeys ?? new Map();
       handKeys.set(targetHandNumber, keys);
       game.handKeys = handKeys;
     }
     const signingKey = make_signing_key_from_seed(hexToBytes(keys.privateKey));
+    const tableSigningKey = tableKeys
+      ? make_signing_key_from_seed(hexToBytes(tableKeys.privateKey))
+      : null;
     const nextGame = {
       ...game,
       signingKey,
       publicKey: make_public_key_from_signing_key(signingKey),
+      tableSigningKey,
+      tablePublicKey: tableSigningKey ? make_public_key_from_signing_key(tableSigningKey) : null,
+      tableKeys,
+      operatorPrivateKey: keys.operatorPrivateKey ?? tableKeys?.operatorPrivateKey,
       handKeyHandId: targetHandNumber,
     };
     gameRef.current = nextGame;
     return nextGame;
   }, [currentSeatNo, prepareHandSession, prepareNetworkSession, resetGame]);
 
+  const requiredTableAggregateSeats = useCallback(() => {
+    const requiredSeats = Number(tableMaxSeats || tableSeats.length || 0);
+    const announcedSeats = tableSeats.slice(0, requiredSeats);
+    if (
+      requiredSeats <= 0
+      || announcedSeats.length !== requiredSeats
+      || announcedSeats.some((seat) => !seat?.playerAddress || !seat?.announcePublicKey)
+    ) {
+      throw new Error('Table aggregate public key requires every player announce key.');
+    }
+    return announcedSeats;
+  }, [tableMaxSeats, tableSeats]);
+
+  const publishTableAggregatePublicKeyMessage = useCallback((game, tableAggregateVerification) => {
+    publishMessage({
+      type: TABLE_AGGREGATE_PUBLIC_KEY_MESSAGE,
+      lobby_id: lobbyId?.toString?.() ?? String(lobbyId ?? ''),
+      table_id: tableId?.toString?.() ?? String(tableId ?? ''),
+      aggregate_public_key: tableAggregateVerification.aggregatePublicKey,
+      aggregate_public_key_digest: tableAggregateVerification.tableAggregatePublicKeyDigest,
+      signature_shares: tableAggregateVerification.signatureShares,
+      signer_seats: tableAggregateVerification.signerSeats,
+      aggregate_signature: tableAggregateVerification.aggregateSignature,
+    });
+  }, [lobbyId, publishMessage, tableId]);
+
+  const submitTableAggregatePublicKeyRound = useCallback(async (game, incomingSignatureShares = null) => {
+    if (!game || game.tableAggregatePublicKeySubmitted) return Boolean(game?.tableAggregatePublicKeySubmitted);
+    if (!lobbyId || !tableId) return false;
+    if (!game.operatorPrivateKey) {
+      throw new Error('Missing operator key for table aggregate public key submit.');
+    }
+
+    const announcedSeats = requiredTableAggregateSeats();
+    const signatureShares = incomingSignatureShares
+      ?? game.tableAggregatePublicKeySignatureShares
+      ?? [];
+    const tableAggregateVerification = buildNextTableAggregatePublicKeyVerification({
+      lobbyId,
+      tableId,
+      tableSeats: announcedSeats,
+      signatureShares,
+      currentSeatNo: game.clientState.player_index,
+      signingKey: game.tableSigningKey,
+      publicKey: game.tablePublicKey,
+    });
+
+    game.tableAggregatePublicKeySignatureShares = tableAggregateVerification.signatureShares;
+    game.tableAggregatePublicKeyDigest = tableAggregateVerification.tableAggregatePublicKeyDigest;
+    game.tableAggregatePublicKey = tableAggregateVerification.aggregatePublicKey;
+
+    if (tableAggregateVerification.complete && !tableAggregateVerification.signed) {
+      game.tableAggregatePublicKeySubmitted = true;
+      return true;
+    }
+
+    if (!tableAggregateVerification.signed) return false;
+
+    appendGameLog(
+      `Table aggregate public key signed by Player ${game.clientState.player_index + 1}`,
+      senderForSeat(game.clientState.player_index),
+    );
+
+    if (tableAggregateVerification.complete && !game.tableAggregatePublicKeySubmitted) {
+      const { hash, aggregatePublicKey } = await setTableAggregatePublicKeyOnChain({
+        lobbyId,
+        tableId,
+        tableAggregateVerification,
+        operatorPrivateKey: game.operatorPrivateKey,
+      });
+      game.tableAggregatePublicKey = aggregatePublicKey;
+      game.tableAggregatePublicKeySubmitted = true;
+      appendGameLog(hash
+        ? `Table aggregate public key submitted on-chain: ${hash}`
+        : 'Table aggregate public key already set on-chain');
+      publishTableAggregatePublicKeyMessage(game, tableAggregateVerification);
+      return true;
+    }
+
+    publishTableAggregatePublicKeyMessage(game, tableAggregateVerification);
+    return false;
+  }, [
+    appendGameLog,
+    buildNextTableAggregatePublicKeyVerification,
+    lobbyId,
+    publishTableAggregatePublicKeyMessage,
+    requiredTableAggregateSeats,
+    senderForSeat,
+    setTableAggregatePublicKeyOnChain,
+    tableId,
+  ]);
+
+  const ensureTableAggregatePublicKey = useCallback(async (game) => {
+    if (!game) return false;
+    if (game.tableAggregatePublicKeySubmitted) return true;
+    if (game.tableAggregatePublicKeyPromise) return game.tableAggregatePublicKeyPromise;
+    if (Number(game.clientState?.hand_id ?? HAND_ID) !== HAND_ID) {
+      game.tableAggregatePublicKeySubmitted = true;
+      return true;
+    }
+
+    const submitPromise = submitTableAggregatePublicKeyRound(game);
+
+    game.tableAggregatePublicKeyPromise = submitPromise;
+    try {
+      return await submitPromise;
+    } finally {
+      game.tableAggregatePublicKeyPromise = null;
+    }
+  }, [submitTableAggregatePublicKeyRound]);
+
   const signWireHistoryEntry = useCallback((wire, game = gameRef.current) => {
-    if (wire?.nop || !wire?.sequence_number || !game?.signingKey || !game?.publicKey) return null;
+    if (wire?.nop || !wire?.sequence_number || !game?.tableSigningKey || !game?.tablePublicKey) return null;
     const encodedWire = encodeWire(wire);
-    const signature = blsSign(historyEntryPayload(encodedWire), game.signingKey);
+    const signature = blsSign(historyEntryPayload(encodedWire), game.tableSigningKey);
     return {
       sequence_number: Number(encodedWire.sequence_number ?? 0),
       from: encodedWire.from,
@@ -1114,7 +1251,7 @@ export function usePokerTable({
       action_signature: {
         scheme: ACTION_SIGNATURE_SCHEME,
         signer_seat: encodedWire.from,
-        public_key: hexPoint(game.publicKey.toRawBytes(true)),
+        public_key: hexPoint(game.tablePublicKey.toRawBytes(true)),
         signature: hexPoint(signature.toRawBytes(true)),
       },
     };
@@ -1129,20 +1266,20 @@ export function usePokerTable({
     if (signature.scheme !== ACTION_SIGNATURE_SCHEME) return false;
     if (signature.signer_seat != null && Number(signature.signer_seat) !== signerSeat) return false;
 
-    const publicKeyCandidates = [
-      signature.public_key,
-      tableSeats[signerSeat]?.announcePublicKey,
-    ].filter(Boolean);
+    const expectedPublicKey = tableSeats[signerSeat]?.announcePublicKey;
+    if (!expectedPublicKey) return false;
+    if (
+      signature.public_key
+      && signature.public_key.toLowerCase() !== expectedPublicKey.toLowerCase()
+    ) return false;
 
-    return publicKeyCandidates.some((candidate) => {
-      try {
-        const publicKey = make_public_key_from_compressed_slice(hexToBytes(ensureHexPrefix(candidate)));
-        const signed = make_signature_from_compressed_slice(hexToBytes(ensureHexPrefix(signature.signature)));
-        return blsVerify(historyEntryPayload(wire), publicKey, signed);
-      } catch {
-        return false;
-      }
-    });
+    try {
+      const publicKey = make_public_key_from_compressed_slice(hexToBytes(ensureHexPrefix(expectedPublicKey)));
+      const signed = make_signature_from_compressed_slice(hexToBytes(ensureHexPrefix(signature.signature)));
+      return blsVerify(historyEntryPayload(wire), publicKey, signed);
+    } catch {
+      return false;
+    }
   }, [tableSeats]);
 
   const rememberHistoryEntry = useCallback((entry) => {
@@ -1393,8 +1530,8 @@ export function usePokerTable({
         settlement: buildFinalHandSettlement(hand, tableSeats),
         signatureShares,
         currentSeatNo: game.clientState.player_index,
-        signingKey: game.signingKey,
-        publicKey: game.publicKey,
+        signingKey: game.tableSigningKey,
+        publicKey: game.tablePublicKey,
       });
 
       game.finalVerificationSignatureShares = finalVerification.signatureShares;
@@ -1409,13 +1546,19 @@ export function usePokerTable({
         `Final verification signed by Player ${game.clientState.player_index + 1}`,
         senderForSeat(game.clientState.player_index),
       );
-      publishFinalVerificationMessage(game, finalVerification);
 
       if (finalVerification.complete && !game.finalVerificationSubmitted) {
+        const hash = await submitFinalHandOnChain({
+          lobbyId,
+          tableId,
+          handId: game.clientState.hand_id ?? HAND_ID,
+          finalVerification,
+          operatorPrivateKey: game.operatorPrivateKey,
+        });
         game.finalVerificationSubmitted = true;
-        submitFinalHandOnChain(finalVerification);
-        appendGameLog('Final hand settlement ready for on-chain submit');
+        appendGameLog(`Final hand settlement submitted on-chain: ${hash}`);
       }
+      publishFinalVerificationMessage(game, finalVerification);
       return true;
     } catch (error) {
       appendGameLog(
@@ -1441,6 +1584,7 @@ export function usePokerTable({
   const submitProtocolAction = useCallback(async () => {
     const game = await ensureKeys();
     if (!game) return null;
+    if (!await ensureTableAggregatePublicKey(game)) return null;
     const hand = game.clientState.current_hand();
     if (!hand) return null;
 
@@ -1507,6 +1651,7 @@ export function usePokerTable({
   }, [
     buildAutomaticAction,
     ensureKeys,
+    ensureTableAggregatePublicKey,
     submitAction,
     submitNop,
     submitFinalVerificationRound,
@@ -1777,6 +1922,7 @@ export function usePokerTable({
     if (
       message?.type !== HISTORY_MESSAGE
       && message?.type !== CHAT_MESSAGE
+      && message?.type !== TABLE_AGGREGATE_PUBLIC_KEY_MESSAGE
       && message?.type !== FINAL_VERIFICATION_MESSAGE
     ) return false;
 
@@ -1787,6 +1933,29 @@ export function usePokerTable({
 
     const game = gameRef.current ?? resetGame();
     if (!game) return true;
+
+    if (message.type === TABLE_AGGREGATE_PUBLIC_KEY_MESSAGE) {
+      try {
+        const keyedGame = await ensureKeys();
+        const submitted = await submitTableAggregatePublicKeyRound(
+          keyedGame ?? game,
+          message.signature_shares ?? [],
+        );
+        updateView({ force: true });
+        if (submitted && currentSeatNo === 0) {
+          await continueAfterPokerMessage();
+        }
+      } catch (error) {
+        appendGameLog(
+          `Table aggregate public key failed: ${error?.shortMessage ?? error?.message ?? error}`,
+          'Game',
+          'error',
+        );
+        updateView({ force: true });
+      }
+      return true;
+    }
+
     const messageHandNumber = Number(message.hand_number ?? message.hand_id ?? game.clientState.hand_id);
     await ensureKeys(messageHandNumber);
 
@@ -1863,16 +2032,19 @@ export function usePokerTable({
     advanceToHistoryHand,
     applyHistoryEntries,
     continueAfterPokerMessage,
+    currentSeatNo,
     ensureKeys,
     resetGame,
     senderForAddress,
     submitFinalVerificationRound,
+    submitTableAggregatePublicKeyRound,
     updateView,
   ]);
 
   const submitBet = useCallback(async (amount) => {
     const game = await ensureKeys();
     if (!game) return;
+    if (!await ensureTableAggregatePublicKey(game)) return;
     const hand = game.clientState.current_hand();
     const state = hand?.get_current_state();
     if (!state || state.current_state !== POKER_HAND_STATE_BET) return;
@@ -1885,11 +2057,12 @@ export function usePokerTable({
       PokerAction.SubmitBet({ player, amount: cappedAmount }),
       [`Player ${player + 1} Bet: $${cappedAmount}`],
     );
-  }, [ensureKeys, submitAction]);
+  }, [ensureKeys, ensureTableAggregatePublicKey, submitAction]);
 
   const submitBlind = useCallback(async () => {
     const game = await ensureKeys();
     if (!game) return;
+    if (!await ensureTableAggregatePublicKey(game)) return;
     const hand = game.clientState.current_hand();
     const state = hand?.get_current_state();
     if (!state) return;
@@ -1910,7 +2083,7 @@ export function usePokerTable({
         [`Big Blind on Player ${player + 1}`],
       );
     }
-  }, [ensureKeys, submitAction]);
+  }, [ensureKeys, ensureTableAggregatePublicKey, submitAction]);
 
   const completeCheatCountdown = useCallback(() => {
     const report = cheatReportRef.current;
@@ -1946,9 +2119,11 @@ export function usePokerTable({
       return;
     }
 
-    if (wasConnected) return;
+    if (wasConnected && gameRef.current?.tableAggregatePublicKeySubmitted) return;
 
-    ensureKeys().then(() => {
+    ensureKeys().then(async (game) => {
+      if (!game) return;
+      if (!await ensureTableAggregatePublicKey(game)) return;
       if (pendingHistorySyncRef.current) {
         pendingHistorySyncRef.current = false;
         sendHistorySync();
@@ -1957,14 +2132,24 @@ export function usePokerTable({
       if (currentSeatNo === 0) {
         continueAfterPokerMessage();
       }
+    }).catch((error) => {
+      appendGameLog(
+        `Table setup failed: ${error?.shortMessage ?? error?.message ?? error}`,
+        'Game',
+        'error',
+      );
+      updateView({ force: true });
     });
   }, [
+    appendGameLog,
     continueAfterPokerMessage,
     currentSeatNo,
     ensureKeys,
+    ensureTableAggregatePublicKey,
     networkSnapshot?.inboundState,
     networkSnapshot?.outboundState,
     sendHistorySync,
+    updateView,
   ]);
 
   const actionBarProps = useMemo(() => {

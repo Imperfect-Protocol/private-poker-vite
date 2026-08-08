@@ -1,80 +1,49 @@
-// lib/crypto.js
-import { bls12_381 } from '@noble/curves/bls12-381';
 import { bytesToHex, hexToBytes } from 'viem';
+import {
+    decrypt_signal_from_peer_hex,
+    encrypt_signal_for_peer,
+} from '@/lib/crum_bls/signal_crypto.js';
+import { PUBLIC_KEY_COMPRESSED_LEN } from '@/lib/crum_bls/util.js';
 
 const ensureHexPrefix = (value) => {
     const normalized = value ?? '';
     return normalized.startsWith('0x') ? normalized : `0x${normalized}`;
 };
 
-export const normalizePeerPublicKey = (value) => ensureHexPrefix(value);
+const CRUM_BLS_SIGNAL_SCHEME = 'CRUM_BLS_G2_XOR_KECCAK_V1';
 
-async function deriveAesKeyFromSharedPoint(sharedPointBytes) {
-    const digest = await crypto.subtle.digest('SHA-256', sharedPointBytes);
-
-    return await crypto.subtle.importKey(
-        'raw',
-        digest,
-        { name: 'AES-GCM' },
-        false,
-        ['encrypt', 'decrypt']
-    );
+function hexByteLength(value) {
+    return hexToBytes(ensureHexPrefix(value)).length;
 }
 
-function deriveSharedPoint(privateKeyBytes, publicKeyBytes) {
-    const scalar = bls12_381.G1.normPrivateKeyToScalar(privateKeyBytes);
-    return bls12_381.G1.ProjectivePoint
-        .fromHex(publicKeyBytes)
-        .multiply(scalar)
-        .toRawBytes(true);
+export const normalizePeerPublicKey = (value) => {
+    const normalized = ensureHexPrefix(value);
+    if (hexByteLength(normalized) !== PUBLIC_KEY_COMPRESSED_LEN) {
+        throw new Error(`Expected ${PUBLIC_KEY_COMPRESSED_LEN}-byte G2 public key`);
+    }
+    return normalized;
+};
+
+function requireCrumBlsSignalPayload(encryptedPayload) {
+    if (encryptedPayload?.scheme !== CRUM_BLS_SIGNAL_SCHEME || !encryptedPayload?.payload) {
+        throw new Error('Expected CRUM BLS G2 signal payload');
+    }
+    return encryptedPayload.payload;
 }
 
 export async function encryptForPeer(recipientPubKeyHex, message) {
-    // 1. Generate an ephemeral keypair
-    const ephemeralPrivKey = bls12_381.utils.randomPrivateKey();
-    const ephemeralPubKey = bls12_381.getPublicKey(ephemeralPrivKey);
-
-    // 2. Use BLS G1 scalar multiplication to derive a shared point.
-    const recipientPubKey = hexToBytes(normalizePeerPublicKey(recipientPubKeyHex));
-    const sharedPoint = deriveSharedPoint(ephemeralPrivKey, recipientPubKey);
-
-    // 3. Encrypt the message with the shared secret
-    const encoder = new TextEncoder();
-    const data = encoder.encode(message);
-    const cryptoKey = await deriveAesKeyFromSharedPoint(sharedPoint);
-
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const ciphertext = await crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv },
-        cryptoKey,
-        data
-    );
-
-    // Return the payload structure needed for decryption
+    const recipientPublicKey = normalizePeerPublicKey(recipientPubKeyHex);
     return {
-        ephemeralPubKey: bytesToHex(ephemeralPubKey),
-        iv: bytesToHex(new Uint8Array(iv)),
-        ciphertext: bytesToHex(new Uint8Array(ciphertext))
+        scheme: CRUM_BLS_SIGNAL_SCHEME,
+        payload: bytesToHex(encrypt_signal_for_peer(
+            recipientPublicKey,
+            new TextEncoder().encode(message)
+        )),
     };
 }
 
 export async function decryptFromPeer(myPrivKeyHex, encryptedPayload) {
-    const { ephemeralPubKey, iv, ciphertext } = encryptedPayload;
-
-    // 1. Reconstruct shared secret
-    const myPrivKey = hexToBytes(ensureHexPrefix(myPrivKeyHex));
-    const theirsPubKey = hexToBytes(ensureHexPrefix(ephemeralPubKey));
-    const sharedPoint = deriveSharedPoint(myPrivKey, theirsPubKey);
-
-    // 2. Import secret as AES key
-    const cryptoKey = await deriveAesKeyFromSharedPoint(sharedPoint);
-
-    // 3. Decrypt
-    const decrypted = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: hexToBytes(ensureHexPrefix(iv)) },
-        cryptoKey,
-        hexToBytes(ensureHexPrefix(ciphertext))
+    return new TextDecoder().decode(
+        decrypt_signal_from_peer_hex(myPrivKeyHex, requireCrumBlsSignalPayload(encryptedPayload))
     );
-
-    return new TextDecoder().decode(decrypted);
 }

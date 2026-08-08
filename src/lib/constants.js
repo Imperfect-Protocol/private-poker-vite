@@ -20,7 +20,7 @@ export const TABLE_FLAGS = {
 export const CHIPS_DECIMALS = 6;
 export const CHIPS_SCALE = 1_000_000n;
 export const OPERATOR_GAS_TOPUP_FACTOR = 10n;
-export const OPERATOR_GAS_MAX_TOPUP = 500_000_000_000_000n;
+export const OPERATOR_GAS_MAX_TOPUP = 1_000_000_000_000_000_000n;
 
 export const SUBSCRIPTION_TIERS = [
     {

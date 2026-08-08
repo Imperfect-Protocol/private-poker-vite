@@ -53,6 +53,9 @@ const rtcMessageLabels = (message) => {
   if (message.type === 'FinalVerification') {
     return [`Final settlement signatures: ${message.signer_seats?.length ?? message.signature_shares?.length ?? 0}`];
   }
+  if (message.type === 'TableAggregatePublicKey') {
+    return [`Table aggregate public key signatures: ${message.signer_seats?.length ?? message.signature_shares?.length ?? 0}`];
+  }
   return [message.type];
 };
 
@@ -121,6 +124,7 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
     if (
       incoming?.type === 'History'
       || incoming?.type === 'ChatMessage'
+      || incoming?.type === 'TableAggregatePublicKey'
       || incoming?.type === 'FinalVerification'
     ) {
       pokerTableRef.current?.handleNetworkMessage(incoming, playerAddress);

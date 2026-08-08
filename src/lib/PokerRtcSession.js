@@ -1,6 +1,11 @@
-import * as bls from '@noble/bls12-381';
 import { hexToBytes, toHex } from 'viem';
 import { decryptFromPeer, encryptForPeer, normalizePeerPublicKey } from '@/lib/crypto';
+import {
+  make_public_key_from_compressed_slice,
+  make_signature_from_compressed_slice,
+  sign as blsSign,
+  verify as blsVerify,
+} from '@/lib/crum_bls';
 import { RTC_POOL_SIGNAL, rtcSessionPool } from '@/lib/RtcSessionPool';
 
 const RTC_CONFIG = {
@@ -29,7 +34,7 @@ const SUBSCRIPTION_STATE = {
 };
 
 const RTC_CONTROL_MESSAGE = 'RTC_CONTROL';
-const TRANSPORT_SIGNATURE_SCHEME = 'BLS12-381-G1-PK-G2-SIG';
+const TRANSPORT_SIGNATURE_SCHEME = 'BLS12-381-G2-PK-G1-SIG';
 const MAX_PUBLISHED_MESSAGE_CACHE = 200;
 
 const normalizeAddress = (value) => value?.toLowerCase() ?? '';
@@ -621,7 +626,7 @@ export class PokerRtcSession {
     const unsignedMessage = stripTransportFields(message);
     const payload = transportSignaturePayload(unsignedMessage, playerAddress);
     const signaturePayload = injectBadSignature ? badSignaturePayload(payload) : payload;
-    const signature = await bls.sign(signaturePayload, hexToBytes(ensureHexPrefix(privateKey)));
+    const signature = blsSign(signaturePayload, hexToBytes(ensureHexPrefix(privateKey)));
 
     return {
       ...unsignedMessage,
@@ -629,7 +634,7 @@ export class PokerRtcSession {
         scheme: TRANSPORT_SIGNATURE_SCHEME,
         signer: playerAddress,
         publicKey: ensureHexPrefix(publicKey),
-        signature: toHex(signature),
+        signature: toHex(signature.toRawBytes(true)),
       },
     };
   }
@@ -649,11 +654,9 @@ export class PokerRtcSession {
 
     const payload = transportSignaturePayload(message, signer);
     try {
-      const ok = await bls.verify(
-        hexToBytes(ensureHexPrefix(signature.signature)),
-        payload,
-        hexToBytes(ensureHexPrefix(signerPublicKey)),
-      );
+      const signed = make_signature_from_compressed_slice(hexToBytes(ensureHexPrefix(signature.signature)));
+      const publicKey = make_public_key_from_compressed_slice(hexToBytes(ensureHexPrefix(signerPublicKey)));
+      const ok = blsVerify(payload, publicKey, signed);
       return { ok, signer, reason: ok ? undefined : 'signature mismatch' };
     } catch (error) {
       return { ok: false, signer, reason: error.message };

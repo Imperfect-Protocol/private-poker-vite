@@ -1,16 +1,12 @@
 import {
   CHAIN_MAX_GAS,
   PRIVATE_POKER_CONTRACT_ADDRESS,
-  VERIFY_SHUFFLE_CONTRACT_ADDRESS,
-  VERIFY_UNMASKING_CONTRACT_ADDRESS,
 } from './chain/index.js';
 
 const normalizeAddress = (address) => address?.toLowerCase?.() ?? '';
 
 const contractGasConfigByAddress = () => new Map([
   [normalizeAddress(PRIVATE_POKER_CONTRACT_ADDRESS), CHAIN_MAX_GAS.privatePoker],
-  [normalizeAddress(VERIFY_SHUFFLE_CONTRACT_ADDRESS), CHAIN_MAX_GAS.verifyShuffle],
-  [normalizeAddress(VERIFY_UNMASKING_CONTRACT_ADDRESS), CHAIN_MAX_GAS.verifyUnmasking],
 ].filter(([, config]) => config));
 
 export async function getBufferedGasOverrides(publicClient, gasRequest) {
@@ -72,19 +68,8 @@ function gasLimitFromConfig(configured, context) {
   return constant + (perPlayer * BigInt(numPlayers));
 }
 
-function inferNumPlayers({ functionName, args } = {}) {
+function inferNumPlayers({ args } = {}) {
   if (!Array.isArray(args)) return null;
-
-  if (functionName === 'verifyUnmasking') {
-    return Number(args[0] ?? 0);
-  }
-
-  if (functionName === 'verifyShuffle') {
-    const maskedAfter = args[1];
-    if (!Array.isArray(maskedAfter)) return null;
-    const inferred = (maskedAfter.length - 5) / 2;
-    return Number.isInteger(inferred) && inferred > 0 ? inferred : null;
-  }
 
   return null;
 }

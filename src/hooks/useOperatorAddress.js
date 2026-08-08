@@ -1,8 +1,8 @@
 import { useCallback } from 'react';
 import { useConnection, useSendTransaction } from 'wagmi';
-import { OPERATOR_GAS_MAX_TOPUP, OPERATOR_GAS_TOPUP_FACTOR } from '@/lib/constants';
-import { OperatorAddress } from '@/lib/OperatorAddress';
-import { publicPokerClient } from '@/lib/publicPokerClient';
+import { OPERATOR_GAS_MAX_TOPUP, OPERATOR_GAS_TOPUP_FACTOR } from '../lib/constants.js';
+import { OperatorAddress } from '../lib/OperatorAddress.js';
+import { publicPokerClient } from '../lib/publicPokerClient.js';
 
 const FALLBACK_GAS_TOKEN_TRANSFER_GAS = 100_000n;
 
