@@ -26,8 +26,8 @@ function getRandomMeshEndpoint() {
   return endpoints[randomIndex].url;
 }
 
-async function sendAndPoll(url, lobbyId, tableId, peer, initialMessage, callback) {
-  const queue = [initialMessage];
+async function sendAndPoll(url, lobbyId, tableId, peer, messages, callback) {
+  const queue = [...messages];
 
   const enqueueFn = (m) => {
     if (m) queue.push(m);
@@ -84,6 +84,7 @@ async function sendAndPoll(url, lobbyId, tableId, peer, initialMessage, callback
         }
       }
     }
+    console.debug(`[privateMesh] poll thread existed for: ${lobbyId}:${tableId}`);
   } catch (error) {
     console.warn('[privateMesh] poll thread error:', error.message);
   }
@@ -103,11 +104,28 @@ export async function announcePrivateMesh({ originAddress, lobbyId, tableId, loo
     lobbyId,
     tableId,
     peer,
-    {
+    [{
       type: 'bootstrap-announce',
       peer,
       lookingFor: targets,
-    },
+    }],
+    callback,
+  );
+}
+
+export async function sendToPrivateMesh({ originAddress, lobbyId, tableId, messages, callback }) {
+  const peer = normalizeAddress(originAddress);
+  if (!peer || !lobbyId || !tableId || typeof callback !== 'function') return;
+
+  const url = getRandomMeshEndpoint();
+  if (!url) return;
+
+  void sendAndPoll(
+    url,
+    lobbyId,
+    tableId,
+    peer,
+    messages,
     callback,
   );
 }

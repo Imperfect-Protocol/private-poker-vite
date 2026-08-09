@@ -7,7 +7,7 @@ import {
   verify as blsVerify,
 } from '@/lib/crum_bls';
 import { RTC_POOL_SIGNAL, rtcSessionPool } from '@/lib/RtcSessionPool';
-import { announcePrivateMesh } from '@/lib/privateMesh';
+import { announcePrivateMesh, sendToPrivateMesh } from '@/lib/privateMesh';
 
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -149,7 +149,29 @@ function badSignaturePayload(payload) {
   return badPayload;
 }
 
-const waitForIceGatheringComplete = () => Promise.resolve();
+function waitForIceGatheringComplete(pc, timeoutMs = 4000) {
+  return new Promise((resolve) => {
+    if (pc.iceGatheringState === 'complete') {
+      resolve();
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      pc.removeEventListener('icegatheringstatechange', checkState);
+      resolve(); // Proceed with whatever candidates we managed to gather if it times out
+    }, timeoutMs);
+
+    function checkState() {
+      if (pc.iceGatheringState === 'complete') {
+        clearTimeout(timer);
+        pc.removeEventListener('icegatheringstatechange', checkState);
+        resolve();
+      }
+    }
+
+    pc.addEventListener('icegatheringstatechange', checkState);
+  });
+}
 
 export class PokerRtcSession {
   constructor({
@@ -299,6 +321,29 @@ export class PokerRtcSession {
         },
       });
     }, 150);
+  }
+
+  scheduleMeshStatus() {
+    const { playerAddress, lobbyId, tableId } = this.config;
+    if (!playerAddress || !lobbyId || !tableId) return;
+
+    if (!this.pendingStatuses || this.pendingStatuses.size === 0) return;
+
+    if (this.statusTimer) clearTimeout(this.statusTimer);
+    this.statusTimer = setTimeout(() => {
+      const messages = Array.from(this.pendingStatuses.values());
+      this.pendingStatuses.clear();
+
+      void sendToPrivateMesh({
+        originAddress: playerAddress,
+        lobbyId,
+        tableId,
+        messages,
+        callback: async (inboundMessage, enqueueFn) => {
+          await this.handleSignal(inboundMessage, enqueueFn);
+        },
+      });
+    }, 1);
   }
 
   getSnapshot() {
@@ -917,6 +962,39 @@ export class PokerRtcSession {
     return nextConnectedPeers;
   }
 
+  sendLinkConnected(peer) {
+    const peerKey = normalizeAddress(peer?.playerAddress ?? peer);
+    if (!peerKey) return;
+
+    if (!this.pendingStatuses) this.pendingStatuses = new Map();
+    this.pendingStatuses.set(peerKey, {
+      type: 'link-connected',
+      from: this.config.playerAddress,
+      to: peerKey,
+      target: peerKey,
+      lobbyId: this.config.lobbyId,
+      tableId: this.config.tableId,
+    });
+    this.scheduleMeshStatus();
+  }
+
+  sendLinkFailed(peer, reason = 'peer_reported') {
+    const peerKey = normalizeAddress(peer?.playerAddress ?? peer);
+    if (!peerKey) return;
+
+    if (!this.pendingStatuses) this.pendingStatuses = new Map();
+    this.pendingStatuses.set(peerKey, {
+      type: 'link-failed',
+      from: this.config.playerAddress,
+      to: peerKey,
+      target: peerKey,
+      lobbyId: this.config.lobbyId,
+      tableId: this.config.tableId,
+      reason,
+    });
+    this.scheduleMeshStatus();
+  }
+
   markLinkConnected(peerAddress, direction) {
     const key = linkKey(peerAddress, direction);
     if (this.connectedLinks.has(key)) return;
@@ -926,6 +1004,8 @@ export class PokerRtcSession {
     if (direction === RTC_LINK.INBOUND) {
       this.clearOfferTimeout(peerAddress);
     }
+    this.sendLinkConnected(peerAddress);
+
     this.emitActivity(`${formatSeat(peerAddress)} ${direction === RTC_LINK.OUTBOUND ? '<=' : '=>'} Connected ${formatKey(this.getPlayerPublicKey(peerAddress))}`);
     this.updateConnectedPeers();
   }
