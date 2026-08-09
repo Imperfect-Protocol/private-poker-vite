@@ -1,13 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useConnection } from 'wagmi';
 import {
   getPrivateMeshUrls,
   publishPrivateMeshBye,
   publishPrivateMesh,
-  subscribeToPrivateMesh,
 } from '@/lib/privateMesh';
-
-const normalizeAddress = (value) => value?.toLowerCase() ?? '';
 
 const formatPeer = (value) => {
   const text = value ? String(value) : '';
@@ -33,8 +30,7 @@ export function usePrivatePokerSignal({ playerAddress } = {}) {
     if (kind === 'bye') {
       return publishPrivateMeshBye({
         originAddress: senderAddress,
-        lobbyId: lobbyId?.toString?.() ?? String(lobbyId),
-        tableId: tableId?.toString?.() ?? String(tableId),
+        enqueue: options.enqueue,
       });
     }
 
@@ -66,68 +62,11 @@ export function usePrivatePokerSignal({ playerAddress } = {}) {
 
     setIsSendingSignal(true);
     try {
-      return await publishPrivateMesh(signals);
+      return publishPrivateMesh(signals, options.enqueue);
     } finally {
       setIsSendingSignal(false);
     }
   }, [senderAddress]);
 
   return { sendSignal, isSendingSignal };
-}
-
-export function useListenForSignals(myPlayerAddress, lobbyId, tableId, onSignalReceived) {
-  const onSignalReceivedRef = useRef(onSignalReceived);
-  const seenSignalsRef = useRef(new Set());
-
-  useEffect(() => {
-    onSignalReceivedRef.current = onSignalReceived;
-  }, [onSignalReceived]);
-
-  useEffect(() => {
-    if (!myPlayerAddress || !lobbyId || !tableId) return undefined;
-
-    let stopped = false;
-    const address = normalizeAddress(myPlayerAddress);
-
-    const handleMesh = (message) => {
-      if (stopped || !message?.payload) return;
-      const logId = message.id ?? `${message.sent_at}:${message.payload}`;
-      if (seenSignalsRef.current.has(logId)) return;
-      seenSignalsRef.current.add(logId);
-      if (seenSignalsRef.current.size > 500) {
-        const [oldestSignalId] = seenSignalsRef.current;
-        seenSignalsRef.current.delete(oldestSignalId);
-      }
-
-      console.log('[RTC signal] Private Mesh signal received', {
-        signalId: logId,
-        recipient: formatPeer(message.recipient),
-        bytes: Math.max(0, (String(message.signal ?? '').length - 2) / 2),
-      });
-
-      Promise.resolve(onSignalReceivedRef.current?.({
-        sender: null,
-        lobbyId: lobbyId.toString(),
-        tableId: tableId.toString(),
-        recipients: [address],
-        encryptedData: message.payload,
-        logId,
-        isRecipient: true,
-      })).catch((error) => {
-        console.log('[RTC debug] Private Mesh signal callback failed', error);
-      });
-    };
-
-    const unsubscribe = subscribeToPrivateMesh(address, handleMesh);
-
-    console.log('[RTC signal] Private Mesh ready', {
-      signalServers: getPrivateMeshUrls().length,
-      recipient: formatPeer(address),
-    });
-
-    return () => {
-      stopped = true;
-      unsubscribe?.();
-    };
-  }, [lobbyId, myPlayerAddress, tableId]);
 }

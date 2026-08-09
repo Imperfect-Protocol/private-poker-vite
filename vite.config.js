@@ -36,6 +36,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/local-rpc$/, '/'),
       },
+      '/local-mesh': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/local-mesh/, ''),
+      }
     },
   },
   resolve: {

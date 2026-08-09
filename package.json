@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:dev": "NEXT_PUBLIC_PRIVATE_POKER_CHAIN=devnode NEXT_PUBLIC_PRIVATE_POKER_MESH=dev vite",
     "build": "vite build && vite build --ssr server/standalone-entry.js --outDir dist/server --emptyOutDir false",
     "lint": "eslint .",
     "test": "node --test src/tests/*.test.js",

@@ -7,10 +7,32 @@ import {
   verify as blsVerify,
 } from '@/lib/crum_bls';
 import { RTC_POOL_SIGNAL, rtcSessionPool } from '@/lib/RtcSessionPool';
+import { announcePrivateMesh } from '@/lib/privateMesh';
 
-const RTC_CONFIG = {
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-};
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
+  { urls: 'stun:global.stun.twilio.com:3478' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+];
+
+function randomRtcConfig() {
+  // const index = Math.floor(Math.random() * ICE_SERVERS.length);
+  // return { iceServers: [ICE_SERVERS[index]] };
+  return {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+    ]
+  };
+}
+
+function formatIceServer(iceServer) {
+  const urls = iceServer?.urls;
+  return Array.isArray(urls) ? urls.join(', ') : urls;
+}
 
 const MAX_PROCESSED_SIGNALS = 300;
 
@@ -54,11 +76,16 @@ const ensureHexPrefix = (value) => {
 const isDeadPeerConnection = (pc) => {
   return !pc || ['closed', 'failed', 'disconnected'].includes(pc.connectionState);
 };
+const linkStatusSymbol = (direction) => (direction === RTC_LINK.OUTBOUND ? '!<' : '!>');
+const connectionFailureLabel = (reason) => {
+  if (/\bfailed\b/i.test(reason ?? '')) return 'Connection Failed';
+  if (/\bdisconnected\b/i.test(reason ?? '')) return 'Connection Disconnected';
+  if (/\bclosed\b/i.test(reason ?? '')) return 'Connection Closed';
+  return null;
+};
 
 function canonicalize(value) {
-  if (Array.isArray(value)) {
-    return value.map(canonicalize);
-  }
+  if (Array.isArray(value)) return value.map(canonicalize);
   if (value && typeof value === 'object') {
     return Object.keys(value)
       .filter((key) => value[key] !== undefined)
@@ -165,6 +192,8 @@ export class PokerRtcSession {
     this.drainingRelayEnvelopes = false;
     this.configKey = '';
     this.snapshotKey = '';
+    this.lookingForPeers = new Set();
+    this.announceTimer = null;
     this.config = {
       playerAddress: undefined,
       operator: undefined,
@@ -225,6 +254,7 @@ export class PokerRtcSession {
     this.logJoins();
     this.sessionPool.registerSession(this);
     this.updateConnectedPeers();
+    this.scheduleMeshAnnounce();
     void this.drainPendingRelayEnvelopes();
   }
 
@@ -233,7 +263,7 @@ export class PokerRtcSession {
     const playersKey = players
       .map((player) => [
         normalizeAddress(player?.playerAddress),
-        player?.annoncePublicKey ?? '',
+        player?.annoncePublicKey ?? player?.announcePublicKey ?? '',
         player?.chips ?? '',
       ].join('/'))
       .join('|');
@@ -249,6 +279,26 @@ export class PokerRtcSession {
       config.tableCapacity ?? 0,
       playersKey,
     ].join('::');
+  }
+
+  scheduleMeshAnnounce() {
+    const { playerAddress, lobbyId, tableId } = this.config;
+    if (!playerAddress || !lobbyId || !tableId) return;
+
+    if (this.lookingForPeers.size === 0) return;
+
+    if (this.announceTimer) clearTimeout(this.announceTimer);
+    this.announceTimer = setTimeout(() => {
+      void announcePrivateMesh({
+        originAddress: playerAddress,
+        lobbyId,
+        tableId,
+        lookingFor: Array.from(this.lookingForPeers),
+        callback: async (inboundMessage, enqueueFn) => {
+          await this.handleSignal(inboundMessage, enqueueFn);
+        },
+      });
+    }, 150);
   }
 
   getSnapshot() {
@@ -286,10 +336,10 @@ export class PokerRtcSession {
       peerStates[peerKey] = hasDisconnectedLink
         ? 'disconnected'
         : hasConnectedLink
-        ? 'connected'
-        : hasActiveLink
-          ? 'connecting'
-          : 'sitting-out';
+          ? 'connected'
+          : hasActiveLink
+            ? 'connecting'
+            : 'sitting-out';
     });
 
     const remoteMediaStreams = {};
@@ -571,12 +621,6 @@ export class PokerRtcSession {
     this.offerRetryTimers.delete(peerKey);
   }
 
-  scheduleOfferRetry(peerPlayerAddress) {
-    const peerKey = normalizeAddress(peerPlayerAddress);
-    if (!peerKey) return;
-    this.offerRetryTimers.delete(peerKey);
-  }
-
   startOfferTimeout(peerPlayerAddress) {
     const peerKey = normalizeAddress(peerPlayerAddress);
     if (!peerKey) return;
@@ -585,9 +629,10 @@ export class PokerRtcSession {
 
   getPlayerPublicKey(peerPlayerAddress) {
     const peerKey = normalizeAddress(peerPlayerAddress);
-    return this.config.players.find(
-      (player) => normalizeAddress(player.playerAddress) === peerKey,
-    )?.annoncePublicKey;
+    const player = this.config.players.find(
+      (p) => normalizeAddress(p.playerAddress) === peerKey,
+    );
+    return player?.annoncePublicKey ?? player?.announcePublicKey ?? undefined;
   }
 
   cachePublishedMessage(message) {
@@ -812,7 +857,7 @@ export class PokerRtcSession {
         payload: { type: 'peer-disconnect' },
       }));
     } catch {
-      // Best effort before the local tab closes.
+      // Best effort before local tab closes.
     }
   }
 
@@ -834,17 +879,18 @@ export class PokerRtcSession {
   logJoins() {
     const { playerAddress, tableId } = this.config;
     this.config.players.forEach((player) => {
-      if (!player?.playerAddress || !player?.annoncePublicKey) return;
+      const pubKey = player?.annoncePublicKey ?? player?.announcePublicKey;
+      if (!player?.playerAddress || !pubKey) return;
 
       const isMe = normalizeAddress(player.playerAddress) === normalizeAddress(playerAddress);
-      const key = `join:${tableId}:${normalizeAddress(player.playerAddress)}:${player.annoncePublicKey}`;
+      const key = `join:${tableId}:${normalizeAddress(player.playerAddress)}:${pubKey}`;
       if (this.joinLog.has(key)) return;
       this.joinLog.add(key);
 
       if (isMe) {
-        this.emitActivity(`[Me] :: Join ${formatKey(player.annoncePublicKey)}`);
+        this.emitActivity(`[Me] :: Join ${formatKey(pubKey)}`);
       } else {
-        this.emitActivity(`${formatSeat(player.playerAddress)} :: Join ${formatKey(player.annoncePublicKey)}`);
+        this.emitActivity(`${formatSeat(player.playerAddress)} :: Join ${formatKey(pubKey)}`);
       }
     });
   }
@@ -884,25 +930,6 @@ export class PokerRtcSession {
     this.updateConnectedPeers();
   }
 
-  sendBootstrapByeOnce() {
-    const { playerAddress, lobbyId, tableId } = this.config;
-    if (!playerAddress || !lobbyId || !tableId) return;
-
-    const key = `${lobbyId}:${tableId}:${normalizeAddress(playerAddress)}`;
-    if (this.bootstrapByeSent.has(key)) return;
-    this.bootstrapByeSent.add(key);
-    void this.sendSignal(lobbyId, tableId, playerAddress, '0x01', {
-      signalType: 'bye',
-    }).catch((error) => {
-      this.bootstrapByeSent.delete(key);
-      this.logActivity(`bootstrap bye failed: ${error.message}`);
-    });
-  }
-
-  isInboundConnected(peerAddress) {
-    return this.connectedLinks.has(linkKey(peerAddress, RTC_LINK.INBOUND));
-  }
-
   resetPeerLink(peerAddress, direction, reason) {
     const peerKey = normalizeAddress(peerAddress);
     const key = linkKey(peerAddress, direction);
@@ -913,24 +940,19 @@ export class PokerRtcSession {
 
     const wasLinkConnected = this.connectedLinks.has(key);
     const wasFullyConnected = this.connectedPeers.has(peerKey);
+    const failedBeforeConnect = !wasLinkConnected ? connectionFailureLabel(reason) : null;
     const subscription = direction === RTC_LINK.INBOUND
       ? this.getSubscription(peerAddress, RTC_LINK.INBOUND)
       : this.getSubscription(peerAddress, RTC_LINK.OUTBOUND);
-    const channel = direction === RTC_LINK.INBOUND
-      ? subscription?.webRtcChannel
-      : subscription?.webRtcChannel;
+    const channel = subscription?.webRtcChannel;
     if (channel) {
       channel.onopen = null;
       channel.onclose = null;
       channel.onmessage = null;
-      if (channel.readyState !== 'closed') {
-        channel.close();
-      }
+      if (channel.readyState !== 'closed') channel.close();
     }
 
-    const peerConnection = direction === RTC_LINK.INBOUND
-      ? subscription?.peerConnection
-      : subscription?.peerConnection;
+    const peerConnection = subscription?.peerConnection;
     if (peerConnection) {
       peerConnection.onconnectionstatechange = null;
       peerConnection.oniceconnectionstatechange = null;
@@ -953,7 +975,9 @@ export class PokerRtcSession {
     const connectedPeers = this.updateConnectedPeers();
 
     if (wasLinkConnected) {
-      this.emitActivity(`${formatSeat(peerAddress)} ${direction === RTC_LINK.OUTBOUND ? '!<' : '!>'} Disconnected ${formatKey(this.getPlayerPublicKey(peerAddress))}`);
+      this.emitActivity(`${formatSeat(peerAddress)} ${linkStatusSymbol(direction)} Disconnected ${formatKey(this.getPlayerPublicKey(peerAddress))}`);
+    } else if (failedBeforeConnect) {
+      this.emitActivity(`${formatSeat(peerAddress)} ${linkStatusSymbol(direction)} ${failedBeforeConnect} ${formatKey(this.getPlayerPublicKey(peerAddress))}`);
     }
 
     this.setSubscriptionState(peerAddress, direction, SUBSCRIPTION_STATE.DISCONNECTED, null);
@@ -1009,16 +1033,19 @@ export class PokerRtcSession {
       this.resetPeerLink(peerAddress, direction, `stale peer connection ${existing.connectionState}`);
     }
 
-    const pc = new RTCPeerConnection(RTC_CONFIG);
+    const rtcConfig = randomRtcConfig();
+    this.logActivity(`selected STUN ${formatIceServer(rtcConfig.iceServers[0])}`, {
+      peer: formatPeer(peerAddress),
+      direction,
+    });
+    const pc = new RTCPeerConnection(rtcConfig);
     this.logActivity(`peer connection created ${formatPeer(peerAddress)} ${direction} create_channel=${createChannel}`);
     pc.ontrack = (event) => {
       this.logActivity(`remote track received ${formatPeer(peerAddress)} ${direction} kind=${event.track?.kind ?? 'unknown'}`);
       const key = linkKey(peerAddress, direction);
       const stream = this.remoteMediaStreams.get(key) ?? new MediaStream();
       const incomingTracks = event.streams.flatMap((eventStream) => eventStream.getTracks());
-      if (event.track) {
-        incomingTracks.push(event.track);
-      }
+      if (event.track) incomingTracks.push(event.track);
 
       incomingTracks.forEach((track) => {
         if (stream.getTracks().some((existingTrack) => existingTrack.id === track.id)) return;
@@ -1055,7 +1082,7 @@ export class PokerRtcSession {
       this.setupDataChannel(
         peerAddress,
         direction,
-        pc.createDataChannel(`poker-token-ring-${direction}`),
+        pc.createDataChannel(`mesh-${direction}`),
       );
     }
 
@@ -1069,7 +1096,10 @@ export class PokerRtcSession {
   async encryptSignalForPeer(recipientPubKey, signal) {
     const { playerAddress, publicKey } = this.config;
     const encryptionPublicKey = normalizePublicKey(recipientPubKey);
-    if (!publicKey || !encryptionPublicKey) return undefined;
+    if (!publicKey || !encryptionPublicKey) {
+      this.logActivity(`encryption failed: missing key (local=${Boolean(publicKey)}, remote=${Boolean(encryptionPublicKey)})`);
+      return undefined;
+    }
 
     const payload = JSON.stringify({
       ...signal,
@@ -1085,131 +1115,106 @@ export class PokerRtcSession {
     };
   }
 
-  async sendEncryptedSignal(recipientAddress, recipientPubKey, signal) {
-    const { playerAddress, operatorPrivateKey, lobbyId, tableId } = this.config;
+  async sendEncryptedSignal(recipientAddress, recipientPubKey, signal, enqueue = null) {
+    const { playerAddress, lobbyId, tableId } = this.config;
     const encryptedSignal = await this.encryptSignalForPeer(recipientPubKey, signal);
-    if (!encryptedSignal) return;
+    if (!encryptedSignal) {
+      throw new Error(`Failed to encrypt signal for peer ${recipientAddress}: missing public key.`);
+    }
 
     await this.sendSignal(lobbyId, tableId, recipientAddress, encryptedSignal.encryptedData, {
       playerAddress,
-      operatorPrivateKey,
+      operatorPrivateKey: this.config.operatorPrivateKey,
       signalType: signal.type,
+      enqueue,
     });
+
     this.emitActivity(`${formatSeat(recipientAddress)} << ${signal.type === 'accept' ? 'Accept' : 'Offer'} ${formatKey(encryptedSignal.encryptionPublicKey)}`);
   }
 
-  async sendPooledEncryptedSignal(recipientAddress, recipientPubKey, signal) {
-    const { playerAddress, lobbyId, tableId } = this.config;
-    const encryptedSignal = await this.encryptSignalForPeer(recipientPubKey, signal);
-    if (!encryptedSignal) return false;
+  async triggerOfferForPeer(peerAddress, enqueue = null) {
+    const peerKey = normalizeAddress(peerAddress);
+    const subscription = this.getSubscription(peerAddress, RTC_LINK.INBOUND);
+    const pubKey = subscription?.publicAnnounceKey ?? this.getPlayerPublicKey(peerAddress);
 
-    const sendPooledSignal = this.sendPooledSignal ?? ((payload) => (
-      this.sessionPool.sendEncryptedSignal(payload)
-    ));
-    const route = await sendPooledSignal({
-      originAddress: playerAddress,
-      targetAddress: recipientAddress,
-      lobbyId,
-      tableId,
-      encryptedData: encryptedSignal.encryptedData,
-    });
-    const sent = route === true || route?.found === true;
-    const waitingForTable = route?.reason === 'peer_table_not_open';
+    this.logActivity(`triggerOfferForPeer for ${formatPeer(peerKey)} (pubKey found: ${Boolean(pubKey)})`);
 
-    if (sent) {
-      this.logActivity(`pooled ${signal.type} routed ${formatPeer(recipientAddress)}`);
-      this.emitActivity(`${formatSeat(recipientAddress)} <~ ${signal.type === 'accept' ? 'Accept' : 'Offer'} ${formatKey(encryptedSignal.encryptionPublicKey)}`);
-    } else if (waitingForTable) {
-      this.logActivity(`pooled ${signal.type} waiting for table ${formatPeer(recipientAddress)}`);
-      this.emitActivity(`${formatSeat(recipientAddress)} :: Reachable, waiting for table`);
-      return 'waiting_for_table';
-    } else {
-      this.logActivity(`pooled ${signal.type} unavailable ${formatPeer(recipientAddress)}`);
+    if (!pubKey) {
+      this.logActivity(`triggerOfferForPeer aborted: missing announce public key for ${formatPeer(peerKey)}`);
+      return;
     }
-    return sent;
+
+    await this.executeSendOffer({
+      playerAddress: peerAddress,
+      annoncePublicKey: pubKey,
+    }, enqueue);
   }
 
-  async sendOffer(peer, {
-    immediate = false,
-    forceSignalServer = false,
-    signalFallbackOnWaiting = false,
-  } = {}) {
+  async executeSendOffer(peer, enqueue = null) {
     const { playerAddress, operatorPrivateKey, publicKey, tableId, lobbyId } = this.config;
-    if (!playerAddress || !operatorPrivateKey || !publicKey || !tableId || !lobbyId || !peer?.playerAddress || !peer?.annoncePublicKey) {
-      const missing = {
+    const peerPubKey = peer?.annoncePublicKey ?? peer?.announcePublicKey;
+
+    if (!playerAddress || !publicKey || !tableId || !lobbyId || !peer?.playerAddress || !peerPubKey) {
+      this.logActivity(`executeSendOffer aborted: incomplete config`, {
         playerAddress: Boolean(playerAddress),
-        operatorPrivateKey: Boolean(operatorPrivateKey),
         publicKey: Boolean(publicKey),
         tableId: Boolean(tableId),
         lobbyId: Boolean(lobbyId),
-        peerPlayerAddress: Boolean(peer?.playerAddress),
-        peerAnnouncePublicKey: Boolean(peer?.annoncePublicKey),
-      };
-      this.logActivity(`offer skipped ${formatPeer(peer?.playerAddress)}: missing bootstrap data`, missing);
-      throw new Error('Cannot send P2P offer yet; bootstrap data is incomplete.');
+        peerAddress: Boolean(peer?.playerAddress),
+        peerPubKey: Boolean(peerPubKey),
+      });
+      return;
     }
 
     try {
       this.hasConnectionError = false;
       if (this.connectedLinks.has(linkKey(peer.playerAddress, RTC_LINK.INBOUND))) {
-        this.logActivity(`offer skipped ${formatPeer(peer.playerAddress)}: inbound already connected`);
         this.setSubscriptionState(peer.playerAddress, RTC_LINK.INBOUND, SUBSCRIPTION_STATE.CONNECTED);
         return;
       }
-      this.logActivity(`offer start ${formatPeer(peer.playerAddress)}`, {
-        immediate,
-        forceSignalServer,
-        signalFallbackOnWaiting,
-      });
+
+      this.logActivity(`executeSendOffer creating SDP offer for ${formatPeer(peer.playerAddress)}`);
       const pc = this.createPeerConnection(peer.playerAddress, RTC_LINK.INBOUND, true);
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       await waitForIceGatheringComplete(pc);
+
       const signal = {
         type: 'offer',
         direction: RTC_LINK.INBOUND,
         sdp: pc.localDescription.sdp,
       };
-      const sentViaPool = forceSignalServer
-        ? false
-        : await this.sendPooledEncryptedSignal(
-          peer.playerAddress,
-          peer.annoncePublicKey,
-          signal,
-        );
-      if (sentViaPool === 'waiting_for_table' && !signalFallbackOnWaiting) {
-        this.setSubscriptionState(peer.playerAddress, RTC_LINK.INBOUND, SUBSCRIPTION_STATE.CREATED);
-        return;
-      }
-      if (!sentViaPool) {
-        this.logActivity(`Private Mesh fallback for offer ${formatPeer(peer.playerAddress)}`);
-        await this.sendEncryptedSignal(peer.playerAddress, peer.annoncePublicKey, signal);
-      }
+
+      await this.sendEncryptedSignal(peer.playerAddress, peerPubKey, signal, enqueue);
       this.setSubscriptionState(peer.playerAddress, RTC_LINK.INBOUND, SUBSCRIPTION_STATE.OFFER_SENT);
       this.startOfferTimeout(peer.playerAddress);
-      this.logActivity(`offer sent ${formatPeer(peer.playerAddress)}`, {
-        immediate,
-        forceSignalServer,
-        signalFallbackOnWaiting,
-      });
       this.emitState();
     } catch (error) {
       this.hasConnectionError = true;
       this.emitState();
-      this.logActivity(`offer failed ${formatPeer(peer.playerAddress)}: ${error.message}`);
+      this.logActivity(`executeSendOffer failed ${formatPeer(peer.playerAddress)}: ${error.message}`);
       const peerKey = normalizeAddress(peer.playerAddress);
       const subscription = this.getSubscription(peer.playerAddress, RTC_LINK.INBOUND);
       const isConnected = this.connectedLinks.has(linkKey(peer.playerAddress, RTC_LINK.INBOUND));
       if (peerKey && subscription && !isConnected) {
         this.setSubscriptionState(peer.playerAddress, RTC_LINK.INBOUND, SUBSCRIPTION_STATE.DISCONNECTED);
       }
-      console.error('Failed to send RTC offer:', error);
     }
   }
 
-  async subscribeTo(peerPlayerAddress, peerAnnouncePubKey, callback, { immediateOffer = false } = {}) {
+  async sendOffer(peer) {
+    const peerKey = normalizeAddress(peer?.playerAddress);
+    if (!peerKey) return;
+
+    this.lookingForPeers.add(peerKey);
+    this.scheduleMeshAnnounce();
+  }
+
+  async subscribeTo(peerPlayerAddress, peerAnnouncePubKey, callback) {
     const peerKey = normalizeAddress(peerPlayerAddress);
     if (!peerKey) return;
+
+    this.lookingForPeers.add(peerKey);
     this.resetPeerLink(peerPlayerAddress, RTC_LINK.INBOUND, 'new subscribeTo call');
     this.inboundSubscriptions.delete(peerKey);
     this.createSubscription(peerPlayerAddress, peerAnnouncePubKey, RTC_LINK.INBOUND, callback);
@@ -1219,31 +1224,21 @@ export class PokerRtcSession {
       playerAddress: peerPlayerAddress,
     });
     this.emitState();
-    await this.sendOffer({
-      playerAddress: peerPlayerAddress,
-      annoncePublicKey: peerAnnouncePubKey,
-    }, { immediate: immediateOffer });
+    this.scheduleMeshAnnounce();
   }
 
   async pokeInboundConnection(peerPlayerAddress, peerAnnouncePubKey, callback) {
     const peerKey = normalizeAddress(peerPlayerAddress);
-    if (!peerKey) {
-      this.logActivity('poke ignored: missing inbound peer');
-      return;
-    }
+    if (!peerKey) return;
 
     if (this.connectedLinks.has(linkKey(peerPlayerAddress, RTC_LINK.INBOUND))) {
-      this.logActivity(`poke ignored ${formatPeer(peerPlayerAddress)}: inbound already connected`);
       this.setSubscriptionState(peerPlayerAddress, RTC_LINK.INBOUND, SUBSCRIPTION_STATE.CONNECTED);
       return;
     }
 
     const existing = this.getSubscription(peerPlayerAddress, RTC_LINK.INBOUND);
     const publicAnnounceKey = peerAnnouncePubKey ?? existing?.publicAnnounceKey;
-    if (!publicAnnounceKey) {
-      this.logActivity(`poke ignored ${formatPeer(peerPlayerAddress)}: missing announce key`);
-      return;
-    }
+    if (!publicAnnounceKey) return;
 
     if (!existing) {
       this.createSubscription(peerPlayerAddress, publicAnnounceKey, RTC_LINK.INBOUND, callback);
@@ -1252,15 +1247,14 @@ export class PokerRtcSession {
       if (callback) existing.callback = callback;
     }
 
-    this.emitActivity(`${formatSeat(peerPlayerAddress)} :: Poke ${formatKey(publicAnnounceKey)}`);
+    this.lookingForPeers.add(peerKey);
     this.resetPeerLink(peerPlayerAddress, RTC_LINK.INBOUND, 'poke');
-    await this.sendOffer({
-      playerAddress: peerPlayerAddress,
-      annoncePublicKey: publicAnnounceKey,
-    }, { immediate: true });
+
+    this.logActivity(`Poke action: re-announcing intent to mesh for ${formatPeer(peerKey)}`);
+    this.scheduleMeshAnnounce();
   }
 
-  async sendAccept(peerAddress, peerPubKey, offerSdp, direction = RTC_LINK.OUTBOUND, { viaDataChannel = false, viaPool = false } = {}) {
+  async sendAccept(peerAddress, peerPubKey, offerSdp, direction = RTC_LINK.OUTBOUND, { viaDataChannel = false, viaPool = false, enqueue = null } = {}) {
     const peerKey = normalizeAddress(peerAddress);
     const existing = this.getSubscription(peerAddress, direction);
     const publicAnnounceKey = peerPubKey ?? existing?.publicAnnounceKey ?? this.getPlayerPublicKey(peerAddress);
@@ -1292,21 +1286,33 @@ export class PokerRtcSession {
         this.emitMediaDataChannelRequired(peerAddress);
         return;
       }
-      this.logActivity(`media accept sent over data channel ${formatPeer(peerAddress)}`);
-    } else if (viaPool) {
-      const sentViaPool = await this.sendPooledEncryptedSignal(peerAddress, publicAnnounceKey, signal);
-      if (!sentViaPool) {
-        this.logActivity(`Private Mesh fallback for accept ${formatPeer(peerAddress)}`);
-        await this.sendEncryptedSignal(peerAddress, publicAnnounceKey, signal);
-      }
     } else {
-      await this.sendEncryptedSignal(peerAddress, publicAnnounceKey, signal);
+      await this.sendEncryptedSignal(peerAddress, publicAnnounceKey, signal, enqueue);
     }
 
     this.setSubscriptionState(peerAddress, direction, SUBSCRIPTION_STATE.ACCEPT_SENT);
   }
 
-  async handleIncomingSignal(senderAddress, signal, { viaDataChannel = false, viaPool = false, receivedDirection = null } = {}) {
+  async handleIncomingSignal(senderAddress, signal, { viaDataChannel = false, viaPool = false, receivedDirection = null, enqueue = null } = {}) {
+    if (signal?.type === 'trigger-offer') {
+      const target = normalizeAddress(signal.target);
+      this.logActivity(`received trigger-offer for target ${formatPeer(target)}`);
+      await this.triggerOfferForPeer(target, enqueue);
+      return;
+    }
+
+    if (signal?.type === 'p2p-route-available') {
+      const target = normalizeAddress(signal.target);
+      const status = signal.status;
+      this.logActivity(`received p2p-route-available for ${formatPeer(target)} [status: ${status}]`);
+      if (status === 'connect_through_peers') {
+        this.emitActivity(`${formatSeat(target)} :: Reachable via P2P Gossip`);
+      } else if (status === 'cut') {
+        this.emitActivity(`${formatSeat(target)} !! P2P Route Cut`);
+      }
+      return;
+    }
+
     const peerPubKey = signal.senderPubKey;
 
     if (signal.type === 'offer') {
@@ -1318,22 +1324,8 @@ export class PokerRtcSession {
         peerPubKey,
         signal.sdp,
         viaDataChannel ? receivedDirection : oppositeLink(signal.direction ?? RTC_LINK.INBOUND),
-        { viaDataChannel, viaPool },
+        { viaDataChannel, viaPool, enqueue },
       );
-      const inbound = this.getSubscription(senderAddress, RTC_LINK.INBOUND);
-      const inboundConnected = this.connectedLinks.has(linkKey(senderAddress, RTC_LINK.INBOUND));
-      if (
-        !viaDataChannel
-        && inbound
-        && !inboundConnected
-        && inbound.state !== SUBSCRIPTION_STATE.OFFER_SENT
-      ) {
-        this.logActivity(`retry inbound offer now that table is open ${formatPeer(senderAddress)}`);
-        await this.sendOffer({
-          playerAddress: senderAddress,
-          annoncePublicKey: peerPubKey,
-        }, { immediate: true });
-      }
       return;
     }
 
@@ -1348,7 +1340,16 @@ export class PokerRtcSession {
     }
   }
 
-  async handleSignal(signalData) {
+  async handleSignal(signalData, enqueue = null) {
+    if (signalData?.type === 'trigger-offer' || signalData?.type === 'p2p-route-available') {
+      await this.handleIncomingSignal(
+        signalData.recipient ?? this.config.playerAddress,
+        signalData,
+        { enqueue },
+      );
+      return;
+    }
+
     const { playerAddress, operator, privateKey, tableId, lobbyId } = this.config;
     if (!tableId || !lobbyId) return;
     if (signalData.tableId !== tableId.toString() || signalData.lobbyId !== lobbyId.toString()) return;
@@ -1364,7 +1365,6 @@ export class PokerRtcSession {
     }
 
     if (signalData.isRecipient === false) return;
-
     if (!privateKey) return;
 
     try {
@@ -1372,10 +1372,13 @@ export class PokerRtcSession {
       const encryptedPayload = JSON.parse(payloadString);
       const decryptedString = await decryptFromPeer(privateKey, encryptedPayload);
       const signal = JSON.parse(decryptedString);
-      await this.handleIncomingSignal(signal.senderPlayerAddress ?? signalData.sender, signal);
+      await this.handleIncomingSignal(
+        signal.senderPlayerAddress ?? signalData.sender,
+        signal,
+        { enqueue },
+      );
     } catch (error) {
       this.logActivity(`signal ignored: ${error.message}`);
-      console.log('Ignored undecryptable RTC signal:', error);
     }
   }
 
@@ -1397,7 +1400,6 @@ export class PokerRtcSession {
           this.pendingRelayEnvelopes.shift();
         }
       }
-      this.logActivity(`pooled signal queued until key ready ${formatPeer(envelope.originAddress)}`);
       return;
     }
 
@@ -1411,7 +1413,6 @@ export class PokerRtcSession {
       });
     } catch (error) {
       this.logActivity(`pooled signal ignored: ${error.message}`);
-      console.log('Ignored undecryptable pooled RTC signal:', error);
     }
   }
 
@@ -1422,7 +1423,6 @@ export class PokerRtcSession {
 
     this.drainingRelayEnvelopes = true;
     const pending = this.pendingRelayEnvelopes.splice(0);
-    this.logActivity(`pooled signal drain ${pending.length}`);
     try {
       for (const envelope of pending) {
         await this.handleRelayEncryptedSignal(envelope);
@@ -1437,12 +1437,12 @@ export class PokerRtcSession {
       .then(() => this.publishSignedMessage(message))
       .catch((error) => {
         this.emitActivity(`[Me]: RTC message signing failed`);
-        this.logActivity(`message signing failed: ${error.message}`);
         console.error('Failed to sign RTC message:', error);
       });
   }
 
   resetForTable() {
+    if (this.announceTimer) clearTimeout(this.announceTimer);
     this.sessionPool.unregisterSession(this);
     this.inboundSubscriptions.forEach((subscription) => {
       if (subscription.webRtcChannel) {
@@ -1498,6 +1498,7 @@ export class PokerRtcSession {
     this.bootstrapByeSent.clear();
     this.publishedMessages.clear();
     this.seenDisagreements.clear();
+    this.lookingForPeers.clear();
     this.localMediaStream = null;
     this.remoteMediaStreams.clear();
     this.mediaSnapshotVersion += 1;
