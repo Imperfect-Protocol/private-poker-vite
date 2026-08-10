@@ -28,14 +28,28 @@ function getRandomMeshEndpoint() {
 
 async function sendAndPoll(url, lobbyId, tableId, peer, messages, callback) {
   const queue = [...messages];
+  let keepAlive = true;
 
   const enqueueFn = (m) => {
     if (m) queue.push(m);
   };
 
   try {
-    while (queue.length > 0) {
-      const outbound = queue.splice(0);
+    while (keepAlive || queue.length > 0) {
+      keepAlive = false;
+      const rawOutbound = queue.splice(0);
+      const outbound = [];
+
+      for (const item of rawOutbound) {
+        const resolved = typeof item === 'function' ? await item() : await item;
+        if (resolved) {
+          if (Array.isArray(resolved)) {
+            outbound.push(...resolved);
+          } else {
+            outbound.push(resolved);
+          }
+        }
+      }
 
       const response = await fetch(url, {
         method: 'POST',
@@ -57,6 +71,11 @@ async function sendAndPoll(url, lobbyId, tableId, peer, messages, callback) {
 
       for (const msg of inboundMessages) {
         let inboundMessage = msg;
+
+        if (msg.type === 'keep-alive') {
+          keepAlive = true;
+          continue;
+        }
 
         if (msg.type === 'trigger-offer') {
           inboundMessage = {
@@ -109,23 +128,6 @@ export async function announcePrivateMesh({ originAddress, lobbyId, tableId, loo
       peer,
       lookingFor: targets,
     }],
-    callback,
-  );
-}
-
-export async function sendToPrivateMesh({ originAddress, lobbyId, tableId, messages, callback }) {
-  const peer = normalizeAddress(originAddress);
-  if (!peer || !lobbyId || !tableId || typeof callback !== 'function') return;
-
-  const url = getRandomMeshEndpoint();
-  if (!url) return;
-
-  void sendAndPoll(
-    url,
-    lobbyId,
-    tableId,
-    peer,
-    messages,
     callback,
   );
 }

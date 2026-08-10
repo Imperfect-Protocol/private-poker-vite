@@ -7,7 +7,7 @@ import {
   verify as blsVerify,
 } from '@/lib/crum_bls';
 import { RTC_POOL_SIGNAL, rtcSessionPool } from '@/lib/RtcSessionPool';
-import { announcePrivateMesh, sendToPrivateMesh } from '@/lib/privateMesh';
+import { announcePrivateMesh } from '@/lib/privateMesh';
 
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -321,29 +321,6 @@ export class PokerRtcSession {
         },
       });
     }, 150);
-  }
-
-  scheduleMeshStatus() {
-    const { playerAddress, lobbyId, tableId } = this.config;
-    if (!playerAddress || !lobbyId || !tableId) return;
-
-    if (!this.pendingStatuses || this.pendingStatuses.size === 0) return;
-
-    if (this.statusTimer) clearTimeout(this.statusTimer);
-    this.statusTimer = setTimeout(() => {
-      const messages = Array.from(this.pendingStatuses.values());
-      this.pendingStatuses.clear();
-
-      void sendToPrivateMesh({
-        originAddress: playerAddress,
-        lobbyId,
-        tableId,
-        messages,
-        callback: async (inboundMessage, enqueueFn) => {
-          await this.handleSignal(inboundMessage, enqueueFn);
-        },
-      });
-    }, 1);
   }
 
   getSnapshot() {
@@ -995,7 +972,7 @@ export class PokerRtcSession {
     this.scheduleMeshStatus();
   }
 
-  markLinkConnected(peerAddress, direction) {
+  markLinkConnected(peerAddress, direction, resolveConnection) {
     const key = linkKey(peerAddress, direction);
     if (this.connectedLinks.has(key)) return;
 
@@ -1004,7 +981,15 @@ export class PokerRtcSession {
     if (direction === RTC_LINK.INBOUND) {
       this.clearOfferTimeout(peerAddress);
     }
-    this.sendLinkConnected(peerAddress);
+
+    resolveConnection({
+      type: 'link-connected',
+      from: this.config.playerAddress,
+      to: peerAddress,
+      target: peerAddress,
+      lobbyId: String(this.config.lobbyId),
+      tableId: String(this.config.tableId),
+    });
 
     this.emitActivity(`${formatSeat(peerAddress)} ${direction === RTC_LINK.OUTBOUND ? '<=' : '=>'} Connected ${formatKey(this.getPlayerPublicKey(peerAddress))}`);
     this.updateConnectedPeers();
@@ -1071,7 +1056,7 @@ export class PokerRtcSession {
     });
   }
 
-  setupDataChannel(peerAddress, direction, dataChannel) {
+  setupDataChannel(peerAddress, direction, dataChannel, resolveConnection) {
     this.logActivity(`${direction} channel attached ${formatPeer(peerAddress)} (${dataChannel.label})`);
 
     dataChannel.onopen = () => {
@@ -1083,7 +1068,7 @@ export class PokerRtcSession {
         direction,
         channel: dataChannel,
       });
-      this.markLinkConnected(peerAddress, direction);
+      this.markLinkConnected(peerAddress, direction, resolveConnection);
     };
 
     dataChannel.onclose = () => {
@@ -1112,6 +1097,14 @@ export class PokerRtcSession {
     if (existing) {
       this.resetPeerLink(peerAddress, direction, `stale peer connection ${existing.connectionState}`);
     }
+
+    let resolveConnection;
+    const connectionPromise = new Promise((resolve) => {
+      resolveConnection = resolve;
+    });
+
+    if (!this.connectionPromises) this.connectionPromises = new Map();
+    this.connectionPromises.set(normalizeAddress(peerAddress), connectionPromise);
 
     const rtcConfig = randomRtcConfig();
     this.logActivity(`selected STUN ${formatIceServer(rtcConfig.iceServers[0])}`, {
@@ -1155,7 +1148,7 @@ export class PokerRtcSession {
     };
     pc.ondatachannel = (event) => {
       this.logActivity(`data channel received ${formatPeer(peerAddress)} ${direction} (${event.channel.label})`);
-      this.setupDataChannel(peerAddress, direction, event.channel);
+      this.setupDataChannel(peerAddress, direction, event.channel, resolveConnection);
     };
 
     if (createChannel) {
@@ -1163,6 +1156,7 @@ export class PokerRtcSession {
         peerAddress,
         direction,
         pc.createDataChannel(`mesh-${direction}`),
+        resolveConnection,
       );
     }
 
@@ -1235,14 +1229,7 @@ export class PokerRtcSession {
     const peerPubKey = peer?.annoncePublicKey ?? peer?.announcePublicKey;
 
     if (!playerAddress || !publicKey || !tableId || !lobbyId || !peer?.playerAddress || !peerPubKey) {
-      this.logActivity(`executeSendOffer aborted: incomplete config`, {
-        playerAddress: Boolean(playerAddress),
-        publicKey: Boolean(publicKey),
-        tableId: Boolean(tableId),
-        lobbyId: Boolean(lobbyId),
-        peerAddress: Boolean(peer?.playerAddress),
-        peerPubKey: Boolean(peerPubKey),
-      });
+      this.logActivity(`executeSendOffer aborted: incomplete config`);
       return;
     }
 
@@ -1255,6 +1242,7 @@ export class PokerRtcSession {
 
       this.logActivity(`executeSendOffer creating SDP offer for ${formatPeer(peer.playerAddress)}`);
       const pc = this.createPeerConnection(peer.playerAddress, RTC_LINK.INBOUND, true);
+
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       await waitForIceGatheringComplete(pc);
@@ -1273,12 +1261,6 @@ export class PokerRtcSession {
       this.hasConnectionError = true;
       this.emitState();
       this.logActivity(`executeSendOffer failed ${formatPeer(peer.playerAddress)}: ${error.message}`);
-      const peerKey = normalizeAddress(peer.playerAddress);
-      const subscription = this.getSubscription(peer.playerAddress, RTC_LINK.INBOUND);
-      const isConnected = this.connectedLinks.has(linkKey(peer.playerAddress, RTC_LINK.INBOUND));
-      if (peerKey && subscription && !isConnected) {
-        this.setSubscriptionState(peer.playerAddress, RTC_LINK.INBOUND, SUBSCRIPTION_STATE.DISCONNECTED);
-      }
     }
   }
 
@@ -1385,8 +1367,11 @@ export class PokerRtcSession {
       const target = normalizeAddress(signal.target);
       const status = signal.status;
       this.logActivity(`received p2p-route-available for ${formatPeer(target)} [status: ${status}]`);
+
       if (status === 'connect_through_peers') {
         this.emitActivity(`${formatSeat(target)} :: Reachable via P2P Gossip`);
+        await this.triggerOfferForPeer(target);
+
       } else if (status === 'cut') {
         this.emitActivity(`${formatSeat(target)} !! P2P Route Cut`);
       }
@@ -1412,10 +1397,17 @@ export class PokerRtcSession {
     if (signal.type === 'accept' || signal.type === 'answer') {
       this.emitActivity(`${formatSeat(senderAddress)} ${viaPool ? '~>' : '>>'} Accept ${formatKey(peerPubKey)}`);
       const direction = viaDataChannel ? receivedDirection : oppositeLink(signal.direction ?? RTC_LINK.OUTBOUND);
-      const pc = this.getSubscription(senderAddress, direction)?.peerConnection;
-      if (pc && pc.signalingState !== 'stable') {
-        await pc.setRemoteDescription({ type: 'answer', sdp: signal.sdp });
-        this.setSubscriptionState(senderAddress, direction, SUBSCRIPTION_STATE.ACCEPT_RECEIVED);
+      const subscription = this.getSubscription(senderAddress, direction);
+      const pc = subscription?.peerConnection;
+
+      await pc.setRemoteDescription({ type: 'answer', sdp: signal.sdp });
+      this.setSubscriptionState(senderAddress, direction, SUBSCRIPTION_STATE.ACCEPT_RECEIVED);
+
+      const peerKey = normalizeAddress(senderAddress);
+      const connectionPromise = this.connectionPromises?.get(peerKey);
+      if (connectionPromise && typeof enqueue === 'function') {
+        enqueue(connectionPromise);
+        this.connectionPromises.delete(peerKey);
       }
     }
   }
