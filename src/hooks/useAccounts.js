@@ -13,6 +13,7 @@ import {
 } from '@/lib/accountProfile';
 import { buildAccountSessionTypedData } from '@/lib/accountSession';
 import { PRIVATE_POKER_CONTRACT_ADDRESS, PPDC_CONTRACT_ADDRESS } from '@/lib/chain';
+import { formatChainError } from '@/lib/chain/errors';
 import { SUBSCRIPTION_TIERS } from '@/lib/constants';
 import { getBufferedGasOverrides } from '@/lib/gas';
 import { publicPokerClient } from '@/lib/publicPokerClient';
@@ -396,7 +397,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
       router.push('/main-lobby');
     } catch (err) {
       console.error('Subscription failed:', err);
-      setError(err?.shortMessage ?? err?.message ?? 'Subscription failed.');
+      setError(formatChainError(err, 'Subscription failed.'));
     } finally {
       setIsSubscribing(false);
       setSubscriptionStep('');

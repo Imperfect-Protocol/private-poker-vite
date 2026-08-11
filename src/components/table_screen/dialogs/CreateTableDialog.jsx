@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { usePrivatePokerLobby } from '@/hooks/usePrivatePokerLobby';
 import TableDialogOverlay from '@/components/dialog/TableDialogOverlay';
 import { getGameTypeName } from '@/lib/constants';
+import { formatChainError } from '@/lib/chain/errors';
 import { STAKES_OPTIONS } from '@/lib/stakes';
 
 export default function CreateTableDialog({
@@ -129,7 +130,7 @@ export default function CreateTableDialog({
       closeDialog(() => onCreateRequest?.(request));
     } catch (error) {
       console.error(error);
-      setSubmitError(error.shortMessage || error.details || error.message || "Transaction failed or was rejected by the wallet.");
+      setSubmitError(formatChainError(error, "Transaction failed or was rejected by the wallet."));
     } finally {
       setIsPending(false);
     }
@@ -256,7 +257,7 @@ export default function CreateTableDialog({
         </div>
 
         {submitError && (
-          <div className="p-3 bg-red-900/50 border border-red-500/50 rounded-lg text-red-400 text-xs font-bold uppercase tracking-widest text-center">
+          <div className="p-3 bg-red-900/50 border border-red-500/50 rounded-lg text-red-400 text-xs font-bold uppercase tracking-widest text-center whitespace-pre-wrap break-all">
             {submitError}
           </div>
         )}

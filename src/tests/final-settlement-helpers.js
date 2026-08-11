@@ -8,7 +8,10 @@ import {
   POKER_HOLDEM_ROUNDS,
   PokerTable,
 } from '../lib/crum_pkr/index.js';
-import { bytesToHex, make_public_key_from_signing_key } from '../lib/crum_bls/index.js';
+import {
+  bytesToHex,
+  make_public_key_from_signing_key,
+} from '../lib/crum_bls/index.js';
 
 export const TABLE_SIGNING_KEYS = [17n, 19n, 23n, 29n, 31n, 37n];
 export const HAND_SIGNING_KEYS = [41n, 43n, 47n, 53n, 59n, 61n];
@@ -97,6 +100,7 @@ export function playFinishedP2pHand(numPlayers, tableId = 777) {
   const tableSigningKeys = TABLE_SIGNING_KEYS.slice(0, numPlayers);
   const handSigningKeys = HAND_SIGNING_KEYS.slice(0, numPlayers);
   const tablePublicKeys = tableSigningKeys.map(make_public_key_from_signing_key);
+  const tableSignaturePublicKeys = tableSigningKeys.map(make_public_key_from_signing_key);
   const handPublicKeys = handSigningKeys.map(make_public_key_from_signing_key);
   const clients = Array.from({ length: numPlayers }, (_, player) => (
     PokerClientState.new(player, tableId, HAND_ID, makePokerTable(numPlayers))
@@ -157,6 +161,7 @@ export function playFinishedP2pHand(numPlayers, tableId = 777) {
     hand,
     tableSigningKeys,
     tablePublicKeys,
+    tableSignaturePublicKeys,
     handSigningKeys,
     handPublicKeys,
     handHistoryEntries,

@@ -217,6 +217,7 @@ test('live final settlement creates table, joins players, starts hand, and settl
     hand,
     tableSigningKeys,
     tablePublicKeys,
+    tableSignaturePublicKeys,
     handHistoryEntries,
     handSetup,
   } = playFinishedP2pHand(NUM_PLAYERS, Number(tableId));
@@ -224,6 +225,10 @@ test('live final settlement creates table, joins players, starts hand, and settl
   const tableSeats = accounts.map((account, seat) => ({
     playerAddress: account.address,
     announcePublicKey: publicKeyHex(tablePublicKeys[seat]),
+  }));
+  const tableSignatureSeats = tableSeats.map((seat, index) => ({
+    ...seat,
+    signaturePublicKey: publicKeyHex(tableSignaturePublicKeys[index]),
   }));
   assert.deepEqual([
     POKER_HAND_STATE_SHUFFLE,
@@ -278,7 +283,8 @@ test('live final settlement creates table, joins players, starts hand, and settl
     });
   }
 
-  const aggregatePublicKey = tableAggregatePublicKey(tableSeats);
+  const aggregatePublicKey = tableAggregatePublicKey(tableSignatureSeats);
+  let tableAggregatePublicKeyShares = [];
   let tableAggregateSignatureShares = [];
   let tableAggregateVerification = null;
   for (let player = 0; player < NUM_PLAYERS; player += 1) {
@@ -286,10 +292,25 @@ test('live final settlement creates table, joins players, starts hand, and settl
       lobbyId: LOBBY_ID,
       tableId,
       tableSeats,
+      publicKeyShares: tableAggregatePublicKeyShares,
+      signatureShares: [],
+      currentSeatNo: player,
+      signingKey: tableSigningKeys[player],
+      publicKey: tableSignaturePublicKeys[player],
+    });
+    tableAggregatePublicKeyShares = tableAggregateVerification.publicKeyShares;
+  }
+
+  for (let player = 0; player < NUM_PLAYERS; player += 1) {
+    tableAggregateVerification = buildNextTableAggregatePublicKeyVerification({
+      lobbyId: LOBBY_ID,
+      tableId,
+      tableSeats,
+      publicKeyShares: tableAggregatePublicKeyShares,
       signatureShares: tableAggregateSignatureShares,
       currentSeatNo: player,
       signingKey: tableSigningKeys[player],
-      publicKey: tablePublicKeys[player],
+      publicKey: tableSignaturePublicKeys[player],
     });
     tableAggregateSignatureShares = tableAggregateVerification.signatureShares;
   }
@@ -329,11 +350,12 @@ test('live final settlement creates table, joins players, starts hand, and settl
       handSetup,
       handHistoryEntries,
       tableSeats,
+      publicKeyShares: tableAggregateVerification.publicKeyShares,
       settlement: buildFinalHandSettlement(hand, tableSeats),
       signatureShares,
       currentSeatNo: player,
       signingKey: tableSigningKeys[player],
-      publicKey: tablePublicKeys[player],
+      publicKey: tableSignaturePublicKeys[player],
     });
     signatureShares = finalVerification.signatureShares;
   }

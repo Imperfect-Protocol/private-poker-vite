@@ -27,6 +27,7 @@ test('final settlement round follows P2P gameplay and Lagrange-aggregates table-
     hand,
     tableSigningKeys,
     tablePublicKeys,
+    tableSignaturePublicKeys,
     handHistoryEntries,
     handSetup,
   } = playFinishedP2pHand(numPlayers);
@@ -34,11 +35,16 @@ test('final settlement round follows P2P gameplay and Lagrange-aggregates table-
     playerAddress: `0x${String(seat + 1).padStart(40, '0')}`,
     announcePublicKey: publicKeyHex(tablePublicKeys[seat]),
   }));
+  const tableSignatureSeats = tableSeats.map((seat, index) => ({
+    ...seat,
+    signaturePublicKey: publicKeyHex(tableSignaturePublicKeys[index]),
+  }));
 
   let signatureShares = [];
   let previousSettlementDigest = null;
   let finalVerification = null;
-  const aggregateTablePublicKey = tableAggregatePublicKey(tableSeats);
+  const aggregateTablePublicKey = tableAggregatePublicKey(tableSignatureSeats);
+  let tableAggregatePublicKeyShares = [];
   let tableAggregateSignatureShares = [];
   let tableAggregateVerification = null;
 
@@ -49,10 +55,29 @@ test('final settlement round follows P2P gameplay and Lagrange-aggregates table-
       lobbyId: 1n,
       tableId: 777n,
       tableSeats,
+      publicKeyShares: tableAggregatePublicKeyShares,
+      signatureShares: [],
+      currentSeatNo: player,
+      signingKey: tableSigningKeys[player],
+      publicKey: tableSignaturePublicKeys[player],
+    });
+
+    assert.equal(tableAggregateVerification.signed, false);
+    assert.equal(tableAggregateVerification.publicKeyAdded, true);
+    assert.equal(tableAggregateVerification.publicKeyShares.length, player + 1);
+    tableAggregatePublicKeyShares = tableAggregateVerification.publicKeyShares;
+  }
+
+  for (let player = 0; player < numPlayers; player += 1) {
+    tableAggregateVerification = buildNextTableAggregatePublicKeyVerification({
+      lobbyId: 1n,
+      tableId: 777n,
+      tableSeats,
+      publicKeyShares: tableAggregatePublicKeyShares,
       signatureShares: tableAggregateSignatureShares,
       currentSeatNo: player,
       signingKey: tableSigningKeys[player],
-      publicKey: tablePublicKeys[player],
+      publicKey: tableSignaturePublicKeys[player],
     });
 
     assert.equal(tableAggregateVerification.signed, true);
@@ -94,11 +119,12 @@ test('final settlement round follows P2P gameplay and Lagrange-aggregates table-
       handSetup,
       handHistoryEntries,
       tableSeats,
+      publicKeyShares: tableAggregateVerification.publicKeyShares,
       settlement,
       signatureShares,
       currentSeatNo: player,
       signingKey: tableSigningKeys[player],
-      publicKey: tablePublicKeys[player],
+      publicKey: tableSignaturePublicKeys[player],
     });
 
     assert.equal(finalVerification.signed, true);

@@ -7,8 +7,8 @@ import { publicPokerClient } from '../lib/publicPokerClient.js';
 import { useOperatorAddress } from './useOperatorAddress.js';
 import {
   bytesToHex,
-  combine as combineLagrange,
   hexToBytes,
+  combine as combineLagrange,
   make_public_key_from_compressed_slice,
   make_signature_from_compressed_slice,
   recover as recoverLagrange,
@@ -225,9 +225,10 @@ function assertFinishedHand(hand) {
   }
 }
 
-function tablePublicKeyForSeat(tableSeats, seat) {
-  const publicKey = tableSeats?.[seat]?.announcePublicKey;
-  if (!publicKey) throw new Error(`Missing final public key for Player ${seat + 1}.`);
+function tablePublicKeyForSeat(tableSeats, publicKeyShares, seat) {
+  const publicKey = tableSeats?.[seat]?.signaturePublicKey
+    ?? publicKeyShares?.find((share) => Number(share?.signer_seat) === Number(seat))?.public_key;
+  if (!publicKey) throw new Error(`Missing final signature public key for Player ${seat + 1}.`);
   return publicKey;
 }
 
@@ -251,14 +252,69 @@ function normalizeSignatureShares(signatureShares = []) {
   ));
 }
 
+function normalizePublicKeyShares(publicKeyShares = []) {
+  return [...publicKeyShares].sort((left, right) => (
+    Number(left.signer_seat ?? 0) - Number(right.signer_seat ?? 0)
+  ));
+}
+
+function assertContiguousShares(shares, label) {
+  shares.forEach((share, index) => {
+    const seat = Number(share?.signer_seat);
+    if (seat !== index) {
+      throw new Error(`${label} expected Player ${index + 1}.`);
+    }
+  });
+}
+
+function collectPublicKeyShares({
+  tableSeats = [],
+  publicKeyShares = [],
+  signatureShares = [],
+  currentSeatNo = null,
+  publicKey = null,
+}) {
+  const bySeat = new Map();
+
+  tableSeats.forEach((seat, index) => {
+    if (seat?.signaturePublicKey) {
+      bySeat.set(index, {
+        signer_seat: index,
+        public_key: ensureHexPrefix(seat.signaturePublicKey),
+      });
+    }
+  });
+
+  for (const share of [...publicKeyShares, ...signatureShares]) {
+    if (share?.public_key == null || share?.signer_seat == null) continue;
+    bySeat.set(Number(share.signer_seat), {
+      signer_seat: Number(share.signer_seat),
+      public_key: ensureHexPrefix(share.public_key),
+    });
+  }
+
+  if (currentSeatNo != null && publicKey) {
+    bySeat.set(Number(currentSeatNo), {
+      signer_seat: Number(currentSeatNo),
+      public_key: pointHex(publicKey),
+    });
+  }
+
+  const ordered = normalizePublicKeyShares([...bySeat.values()]);
+  assertContiguousShares(ordered, 'Table signature public key collection');
+  return ordered;
+}
+
 function aggregateSignatureShares({
   tableSeats,
+  publicKeyShares = [],
   signatureShares,
   signaturePayload,
   scheme = FINAL_VERIFICATION_SIGNATURE_SCHEME,
   expectedSignatureLabel = 'final verification',
 }) {
   const ordered = normalizeSignatureShares(signatureShares);
+  const orderedPublicKeyShares = normalizePublicKeyShares(publicKeyShares);
   const signatureSharePoints = [];
   const publicKeySharePoints = [];
 
@@ -271,7 +327,9 @@ function aggregateSignatureShares({
       throw new Error(`Unsupported ${expectedSignatureLabel} signature from Player ${seat + 1}.`);
     }
 
-    const expectedPublicKey = ensureHexPrefix(tablePublicKeyForSeat(tableSeats, seat)).toLowerCase();
+    const expectedPublicKey = ensureHexPrefix(
+      tablePublicKeyForSeat(tableSeats, orderedPublicKeyShares, seat),
+    ).toLowerCase();
     if (ensureHexPrefix(share.public_key).toLowerCase() !== expectedPublicKey) {
       throw new Error(`${expectedSignatureLabel} public key mismatch for Player ${seat + 1}.`);
     }
@@ -347,22 +405,29 @@ export function settlementArgsDigest({
   const potSize = normalizedPotSplit.reduce((sum, amount) => sum + amount, 0n);
   return keccak256(encodeAbiParameters(
     [
-      { type: 'uint256' },
-      { type: 'uint256' },
-      { type: 'uint256' },
-      { type: 'uint256' },
-      { type: 'uint256[]' },
-      { type: 'uint256[]' },
-      { type: 'bytes' },
+      {
+        type: 'tuple',
+        components: [
+          { type: 'uint256' },
+          { type: 'uint256' },
+          { type: 'uint256' },
+          { type: 'uint256' },
+          { type: 'uint256[]' },
+          { type: 'uint256[]' },
+          { type: 'bytes' },
+        ],
+      },
     ],
     [
-      BigInt(lobbyId),
-      BigInt(tableId),
-      BigInt(handId),
-      potSize,
-      normalizedPotSplit,
-      normalizedChipsBalances,
-      ensureHexPrefix(digest),
+      [
+        BigInt(lobbyId),
+        BigInt(tableId),
+        BigInt(handId),
+        potSize,
+        normalizedPotSplit,
+        normalizedChipsBalances,
+        ensureHexPrefix(digest),
+      ],
     ],
   ));
 }
@@ -374,14 +439,21 @@ export function tableAggregatePublicKeyDigest({
 }) {
   return keccak256(encodeAbiParameters(
     [
-      { type: 'uint256' },
-      { type: 'uint256' },
-      { type: 'bytes' },
+      {
+        type: 'tuple',
+        components: [
+          { type: 'uint256' },
+          { type: 'uint256' },
+          { type: 'bytes' },
+        ],
+      },
     ],
     [
-      BigInt(lobbyId),
-      BigInt(tableId),
-      ensureHexPrefix(aggregatePublicKey),
+      [
+        BigInt(lobbyId),
+        BigInt(tableId),
+        ensureHexPrefix(aggregatePublicKey),
+      ],
     ],
   ));
 }
@@ -401,16 +473,30 @@ export function tableAggregatePublicKey(tableSeats = []) {
     if (!seat?.playerAddress) {
       throw new Error(`Missing player for seat ${index + 1}.`);
     }
-    if (!seat?.announcePublicKey) {
-      throw new Error(`Missing announce public key for Player ${index + 1}.`);
+    if (!seat?.signaturePublicKey) {
+      throw new Error(`Missing signature public key for Player ${index + 1}.`);
     }
     return [
       BigInt(index + 1),
-      make_public_key_from_compressed_slice(hexToBytes(ensureHexPrefix(seat.announcePublicKey))),
+      decodePublicKey(seat.signaturePublicKey),
     ];
   });
 
   return hexPoint(recoverLagrange(publicKeyShares).toRawBytes(true));
+}
+
+function tableAggregatePublicKeyFromShares(publicKeyShares = []) {
+  const publicKeySharePoints = normalizePublicKeyShares(publicKeyShares).map((share, index) => {
+    if (Number(share.signer_seat) !== index) {
+      throw new Error(`Table aggregate public key expected Player ${index + 1} signature key.`);
+    }
+    return [
+      BigInt(index + 1),
+      decodePublicKey(share.public_key),
+    ];
+  });
+
+  return hexPoint(recoverLagrange(publicKeySharePoints).toRawBytes(true));
 }
 
 export function tableAggregatePublicKeyContractArgs({
@@ -436,16 +522,125 @@ export function tableAggregatePublicKeyContractArgs({
   ];
 }
 
+export function assertValidTableAggregatePublicKeyVerification({
+  lobbyId,
+  tableId,
+  tableSeats,
+  tableAggregateVerification,
+}) {
+  tableAggregatePublicKeyContractArgs({
+    lobbyId,
+    tableId,
+    tableAggregateVerification,
+  });
+
+  const publicKeyShares = collectPublicKeyShares({
+    tableSeats,
+    publicKeyShares: tableAggregateVerification.publicKeyShares,
+    signatureShares: tableAggregateVerification.signatureShares,
+  });
+  const expectedAggregatePublicKey = tableAggregatePublicKeyFromShares(publicKeyShares);
+  const actualAggregatePublicKey = ensureHexPrefix(tableAggregateVerification.aggregatePublicKey);
+  if (actualAggregatePublicKey.toLowerCase() !== expectedAggregatePublicKey.toLowerCase()) {
+    throw new Error('Table aggregate public key preflight failed: aggregate public key mismatch.');
+  }
+
+  const expectedDigest = tableAggregatePublicKeyDigest({
+    lobbyId,
+    tableId,
+    aggregatePublicKey: expectedAggregatePublicKey,
+  });
+  const actualDigest = ensureHexPrefix(tableAggregateVerification.tableAggregatePublicKeyDigest);
+  if (actualDigest.toLowerCase() !== expectedDigest.toLowerCase()) {
+    throw new Error('Table aggregate public key preflight failed: digest mismatch.');
+  }
+
+  const signaturePayload = hexToBytes(expectedDigest);
+  const verified = aggregateSignatureShares({
+    tableSeats,
+    publicKeyShares,
+    signatureShares: tableAggregateVerification.signatureShares,
+    signaturePayload,
+    scheme: TABLE_AGGREGATE_PUBLIC_KEY_SIGNATURE_SCHEME,
+    expectedSignatureLabel: 'table aggregate public key',
+  });
+
+  const expectedSignerCount = tableSeats.length;
+  if (verified.signatureShares.length !== expectedSignerCount) {
+    throw new Error(`Table aggregate public key preflight failed: expected ${expectedSignerCount} signatures.`);
+  }
+
+  const expectedAggregateSignature = ensureHexPrefix(tableAggregateVerification.aggregateSignature);
+  if (ensureHexPrefix(verified.aggregateSignature).toLowerCase() !== expectedAggregateSignature.toLowerCase()) {
+    throw new Error('Table aggregate public key preflight failed: aggregate signature mismatch.');
+  }
+
+  if (ensureHexPrefix(verified.aggregatePublicKey).toLowerCase() !== expectedAggregatePublicKey.toLowerCase()) {
+    throw new Error('Table aggregate public key preflight failed: recovered aggregate public key mismatch.');
+  }
+
+  const aggregatePublicKey = decodePublicKey(expectedAggregatePublicKey);
+  const aggregateSignature = decodeSignature(expectedAggregateSignature);
+  if (!blsVerifyDigest(signaturePayload, aggregatePublicKey, aggregateSignature)) {
+    throw new Error('Table aggregate public key preflight failed: invalid aggregate signature.');
+  }
+
+  return {
+    aggregatePublicKey: expectedAggregatePublicKey,
+    aggregateSignature: expectedAggregateSignature,
+    digest: expectedDigest,
+    publicKeyShares,
+    signerSeats: verified.signerSeats,
+  };
+}
+
 export function buildNextTableAggregatePublicKeyVerification({
   lobbyId,
   tableId,
   tableSeats,
+  publicKeyShares = [],
   signatureShares = [],
   currentSeatNo,
   signingKey,
   publicKey,
 }) {
-  const aggregatePublicKey = tableAggregatePublicKey(tableSeats);
+  const numPlayers = tableSeats.length;
+  const previousPublicKeyShares = collectPublicKeyShares({
+    tableSeats,
+    publicKeyShares,
+    signatureShares,
+  });
+  const shouldAddPublicKey = publicKey != null
+    && Number(currentSeatNo) === previousPublicKeyShares.length
+    && !previousPublicKeyShares.some((share) => (
+      Number(share.signer_seat) === Number(currentSeatNo)
+    ));
+  const nextPublicKeyShares = collectPublicKeyShares({
+    tableSeats,
+    publicKeyShares,
+    signatureShares,
+    currentSeatNo: shouldAddPublicKey ? currentSeatNo : null,
+    publicKey: shouldAddPublicKey ? publicKey : null,
+  });
+  const addedPublicKey = shouldAddPublicKey;
+  const nextPublicKeySeat = nextPublicKeyShares.length;
+  if (nextPublicKeySeat < numPlayers) {
+    return {
+      publicKeyShares: nextPublicKeyShares,
+      signatureShares: normalizeSignatureShares(signatureShares),
+      signerSeats: [],
+      aggregateSignature: null,
+      aggregatePublicKey: null,
+      tableAggregatePublicKeyDigest: null,
+      signaturePayload: null,
+      nextSeat: nextPublicKeySeat,
+      complete: false,
+      signed: false,
+      publicKeyAdded: addedPublicKey,
+    };
+  }
+
+  const aggregatePublicKey = tableAggregatePublicKeyFromShares(nextPublicKeyShares);
   const digest = tableAggregatePublicKeyDigest({
     lobbyId,
     tableId,
@@ -454,6 +649,7 @@ export function buildNextTableAggregatePublicKeyVerification({
   const signaturePayload = hexToBytes(digest);
   const verified = aggregateSignatureShares({
     tableSeats,
+    publicKeyShares: nextPublicKeyShares,
     signatureShares,
     signaturePayload,
     scheme: TABLE_AGGREGATE_PUBLIC_KEY_SIGNATURE_SCHEME,
@@ -461,10 +657,10 @@ export function buildNextTableAggregatePublicKeyVerification({
   });
 
   const nextSeat = verified.signatureShares.length;
-  const numPlayers = tableSeats.length;
   if (nextSeat >= numPlayers) {
     return {
       ...verified,
+      publicKeyShares: nextPublicKeyShares,
       aggregatePublicKey,
       tableAggregatePublicKeyDigest: digest,
       signaturePayload,
@@ -476,16 +672,20 @@ export function buildNextTableAggregatePublicKeyVerification({
   if (Number(currentSeatNo) !== nextSeat) {
     return {
       ...verified,
+      publicKeyShares: nextPublicKeyShares,
       aggregatePublicKey,
       tableAggregatePublicKeyDigest: digest,
       signaturePayload,
       nextSeat,
       complete: false,
       signed: false,
+      publicKeyAdded: addedPublicKey,
     };
   }
 
-  const finalPublicKey = publicKey ?? tablePublicKeyForSeat(tableSeats, currentSeatNo);
+  const finalPublicKey = publicKey ?? decodePublicKey(
+    tablePublicKeyForSeat(tableSeats, nextPublicKeyShares, currentSeatNo),
+  );
   const signature = blsSignDigest(signaturePayload, signingKey);
   const nextSignatureShares = [
     ...verified.signatureShares,
@@ -498,6 +698,7 @@ export function buildNextTableAggregatePublicKeyVerification({
   ];
   const nextVerified = aggregateSignatureShares({
     tableSeats,
+    publicKeyShares: nextPublicKeyShares,
     signatureShares: nextSignatureShares,
     signaturePayload,
     scheme: TABLE_AGGREGATE_PUBLIC_KEY_SIGNATURE_SCHEME,
@@ -506,6 +707,7 @@ export function buildNextTableAggregatePublicKeyVerification({
 
   return {
     ...nextVerified,
+    publicKeyShares: nextPublicKeyShares,
     aggregatePublicKey,
     tableAggregatePublicKeyDigest: digest,
     signaturePayload,
@@ -523,6 +725,7 @@ export function buildNextFinalVerification({
   handSetup,
   handHistoryEntries,
   tableSeats,
+  publicKeyShares = [],
   settlement = buildFinalHandSettlement(hand, tableSeats),
   signatureShares = [],
   currentSeatNo,
@@ -550,6 +753,7 @@ export function buildNextFinalVerification({
   });
   const verified = aggregateSignatureShares({
     tableSeats,
+    publicKeyShares,
     signatureShares,
     signaturePayload: digestPayload.signaturePayload,
   });
@@ -560,6 +764,7 @@ export function buildNextFinalVerification({
     return {
       ...digestPayload,
       ...verified,
+      publicKeyShares,
       nextSeat,
       complete: true,
       signed: false,
@@ -569,13 +774,16 @@ export function buildNextFinalVerification({
     return {
       ...digestPayload,
       ...verified,
+      publicKeyShares,
       nextSeat,
       complete: false,
       signed: false,
     };
   }
 
-  const finalPublicKey = publicKey ?? tablePublicKeyForSeat(tableSeats, currentSeatNo);
+  const finalPublicKey = publicKey ?? decodePublicKey(
+    tablePublicKeyForSeat(tableSeats, publicKeyShares, currentSeatNo),
+  );
   const signature = blsSignDigest(digestPayload.signaturePayload, signingKey);
   const nextSignatureShares = [
     ...verified.signatureShares,
@@ -588,6 +796,7 @@ export function buildNextFinalVerification({
   ];
   const nextVerified = aggregateSignatureShares({
     tableSeats,
+    publicKeyShares,
     signatureShares: nextSignatureShares,
     signaturePayload: digestPayload.signaturePayload,
   });
@@ -595,6 +804,7 @@ export function buildNextFinalVerification({
   return {
     ...digestPayload,
     ...nextVerified,
+    publicKeyShares,
     nextSeat: nextVerified.signatureShares.length,
     complete: nextVerified.signatureShares.length === numPlayers,
     signed: true,
@@ -618,14 +828,17 @@ export function useFinalVerification({ onOperatorTopUp } = {}) {
     args,
     operatorPrivateKey,
   }) => {
+    let hash;
     if (operatorPrivateKey) {
-      return writeContractFromOperator({
+      hash = await writeContractFromOperator({
         operatorPrivateKey,
         contract: PRIVATE_POKER_CONTRACT_ADDRESS,
         abi: SETTLER_ABI,
         functionName,
         args,
       });
+      await publicPokerClient.waitForTransactionReceipt({ hash });
+      return hash;
     }
 
     const overrides = address
@@ -638,13 +851,15 @@ export function useFinalVerification({ onOperatorTopUp } = {}) {
       })
       : {};
 
-    return mutateAsync({
+    hash = await mutateAsync({
       address: PRIVATE_POKER_CONTRACT_ADDRESS,
       abi: SETTLER_ABI,
       functionName,
       args,
       ...overrides,
     });
+    await publicPokerClient.waitForTransactionReceipt({ hash });
+    return hash;
   }, [address, mutateAsync, writeContractFromOperator]);
 
   const submitFinalHandOnChain = useCallback(async ({
@@ -671,14 +886,22 @@ export function useFinalVerification({ onOperatorTopUp } = {}) {
   const setTableAggregatePublicKeyOnChain = useCallback(async ({
     lobbyId,
     tableId,
+    tableSeats,
     tableAggregateVerification,
     operatorPrivateKey,
   }) => {
+    const preflight = assertValidTableAggregatePublicKeyVerification({
+      lobbyId,
+      tableId,
+      tableSeats,
+      tableAggregateVerification,
+    });
     const args = tableAggregatePublicKeyContractArgs({
       lobbyId,
       tableId,
       tableAggregateVerification,
     });
+    console.log('[FinalVerification] setTableAggregatePublicKey preflight passed', preflight);
     try {
       const hash = await writePrivatePokerContract({
         functionName: 'setTableAggregatePublicKey',

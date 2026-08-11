@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import TableDialogOverlay from '@/components/dialog/TableDialogOverlay';
+import { formatChainError } from '@/lib/chain/errors';
 
 export default function BuyInDialog({ tableData, lobbyId, onClose, onJoinRequest }) {
   const [isPending, setIsPending] = useState(false);
@@ -30,7 +31,7 @@ export default function BuyInDialog({ tableData, lobbyId, onClose, onJoinRequest
       closeDialog(() => onJoinRequest?.(request));
     } catch (error) {
       console.error(error);
-      setSubmitError(error.shortMessage || error.details || error.message || "Transaction failed or rejected.");
+      setSubmitError(formatChainError(error, "Transaction failed or rejected."));
     } finally {
       setIsPending(false);
     }
@@ -56,7 +57,7 @@ export default function BuyInDialog({ tableData, lobbyId, onClose, onJoinRequest
         </div>
 
         {submitError && (
-          <div className="p-3 bg-red-900/50 border border-red-500/50 rounded-lg text-red-400 text-xs font-bold uppercase tracking-widest text-center">
+          <div className="p-3 bg-red-900/50 border border-red-500/50 rounded-lg text-red-400 text-xs font-bold uppercase tracking-widest text-center whitespace-pre-wrap break-all">
             {submitError}
           </div>
         )}
