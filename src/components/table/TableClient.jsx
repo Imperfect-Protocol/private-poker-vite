@@ -50,8 +50,11 @@ const rtcMessageLabels = (message) => {
     }
     return [submitConsoleLine(lastHistoryEntry?.wire?.submit ?? message.wire?.submit) ?? 'History'];
   }
-  if (message.type === 'FinalVerification') {
+  if (message.type === 'SettleHand') {
     return [`Final settlement signatures: ${message.signer_seats?.length ?? message.signature_shares?.length ?? 0}`];
+  }
+  if (message.type === 'StartHand') {
+    return [`Start hand on-chain confirmed by Player ${Number(message.seat_no ?? 0) + 1}`];
   }
   if (message.type === 'TableAggregatePublicKey') {
     return [`Table aggregate public key signatures: ${message.signer_seats?.length ?? message.signature_shares?.length ?? 0}`];
@@ -124,8 +127,9 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
     if (
       incoming?.type === 'History'
       || incoming?.type === 'ChatMessage'
+      || incoming?.type === 'StartHand'
       || incoming?.type === 'TableAggregatePublicKey'
-      || incoming?.type === 'FinalVerification'
+      || incoming?.type === 'SettleHand'
     ) {
       pokerTableRef.current?.handleNetworkMessage(incoming, playerAddress);
       return;
@@ -170,10 +174,6 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
 
   const [pokerTableState, pokerTableActions] = usePokerTable({
     table,
-    networkSnapshot: table.networkSnapshot,
-    publishMessage: table.publishMessage,
-    prepareNetworkSession: table.prepareNetworkSession,
-    prepareHandSession: table.prepareHandSession,
     onOperatorTopUp: handleOperatorTopUp,
   });
   const playerAddresses = useMemo(() => (

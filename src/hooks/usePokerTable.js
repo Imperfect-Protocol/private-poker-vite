@@ -31,11 +31,23 @@ import {
 } from '@/lib/crum_pkr';
 import { holdemShowdown } from '@/lib/crum_pkr/hand_evaluator';
 import { buildFinalHandSettlement, useFinalVerification } from '@/hooks/useFinalVerification';
+import { VirtualTokenRing } from '@/hooks/useTokenRing.js';
 import { formatChainError } from '@/lib/chain/errors.js';
+import {
+  TABLE_PROTOCOL_STATE_HAND_IN_PROGRESS,
+  TABLE_PROTOCOL_STATE_HAND_DISPUTED,
+  TABLE_PROTOCOL_STATE_START_HAND,
+  TABLE_PROTOCOL_STATE_TABLE_AGGREGATE_PUBLIC_KEY,
+  TABLE_PROTOCOL_STATE_TABLE_COMPLETE,
+  TABLE_PROTOCOL_STATE_SETTLE_HAND,
+  TableProtocolState,
+  tableProtocolStateType,
+} from '@/lib/table_protocol_state.js';
 
 const HISTORY_MESSAGE = 'History';
 const CHAT_MESSAGE = 'ChatMessage';
-const FINAL_VERIFICATION_MESSAGE = 'FinalVerification';
+const SETTLE_HAND_MESSAGE = 'SettleHand';
+const START_HAND_MESSAGE = 'StartHand';
 const TABLE_AGGREGATE_PUBLIC_KEY_MESSAGE = 'TableAggregatePublicKey';
 const ACTION_SIGNATURE_SCHEME = 'BLS12-381-G2-PK-G1-SIG';
 const BETTING_UI_STATES = new Set(['PreFlop', 'Flop', 'Turn', 'River']);
@@ -353,24 +365,6 @@ function makePokerTable(numPlayers) {
   return table;
 }
 
-function makePokerTableForHand(numPlayers, handSetup) {
-  const table = PokerTable.new(numPlayers, POKER_HOLDEM_ROUNDS);
-  for (let player = 1; player <= numPlayers; player += 1) {
-    table.join(player);
-  }
-  const handNumber = Math.max(1, Number(handSetup?.hand_number ?? handSetup?.hand_id ?? HAND_ID));
-  const initialChips = Array.isArray(handSetup?.initial_chips) && handSetup.initial_chips.length === numPlayers
-    ? handSetup.initial_chips.map((chips) => Number(chips))
-    : Array(numPlayers).fill(INITIAL_CHIPS);
-  const smallBlind = Number(handSetup?.small_blind ?? SMALL_BLIND);
-  const dealerButton = Number(handSetup?.dealer_button ?? 0);
-  table.hand_number = handNumber - 1;
-  table.start_hand(initialChips, smallBlind, dealerButton);
-  table.hand_number = handNumber;
-  table.clear_events?.();
-  return table;
-}
-
 function cardsToStrings(cards) {
   return cards
     .filter(Boolean)
@@ -593,12 +587,46 @@ function settlementWinnerIndex(settlement, tableSeats = []) {
   return addressWinner >= 0 ? addressWinner : null;
 }
 
+function protocolType(gameOrState) {
+  return tableProtocolStateType(gameOrState?.tableProtocolState ?? gameOrState);
+}
+
+function transitionTableProtocol(game, nextState) {
+  if (!game || !nextState?.type) return nextState;
+  game.tableProtocolState = nextState;
+  return nextState;
+}
+
+function protocolStateOr(game, fallbackState) {
+  return game?.tableProtocolState ?? fallbackState;
+}
+
+function startHandState(game, fallbackHandId = null) {
+  const state = game?.tableProtocolState;
+  if (protocolType(state) === TABLE_PROTOCOL_STATE_START_HAND) {
+    return state;
+  }
+  return TableProtocolState.startHand({ handId: fallbackHandId });
+}
+
+function settleHandState(game, fallbackHandId = null) {
+  const state = game?.tableProtocolState;
+  if (protocolType(state) === TABLE_PROTOCOL_STATE_SETTLE_HAND) {
+    return state;
+  }
+  return TableProtocolState.settleHand({ handId: fallbackHandId });
+}
+
 function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null, tableSeats = []) {
   const hand = game?.clientState.current_hand();
   const viewerPlayerIndex = viewerSeatNo ?? game?.clientState.player_index ?? 0;
   if (!game || !hand) {
     return {
       state: 'Waiting',
+      tableProtocolState: protocolType(protocolStateOr(
+        game,
+        TableProtocolState.tableAggregatePublicKey(),
+      )),
       seat: null,
       pot: 0,
       minBet: 0,
@@ -621,8 +649,11 @@ function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null, tab
     const allInPlayers = hand.betting_state?.allin_players ?? [];
     return {
       state: 'Cheated',
+      tableProtocolState: protocolType(protocolStateOr(
+        game,
+        TableProtocolState.handDisputed(),
+      )),
       seat,
-      canStartNextHand: true,
       pot: Number(hand.betting_state?.pot?.toString?.() ?? 0),
       minBet: safeCallAmount(hand, viewerPlayerIndex),
       maxBet: safeChipsRemaining(hand, viewerPlayerIndex),
@@ -679,8 +710,12 @@ function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null, tab
 
     return {
       state: pokerState.type === 'Finished' && !finalSettlementComplete ? 'FinalSettlement' : 'Showdown',
+      tableProtocolState: protocolType(protocolStateOr(game, (
+        pokerState.type === 'Finished'
+          ? TableProtocolState.settleHand({ handId: game?.clientState?.hand_id })
+          : TableProtocolState.handInProgress({ handId: game?.clientState?.hand_id })
+      ))),
       seat,
-      canStartNextHand: finalSettlementComplete && pokerState.type === 'Finished',
       pot: payoutAmount,
       minBet: safeCallAmount(hand, viewerPlayerIndex),
       maxBet: safeChipsRemaining(hand, viewerPlayerIndex),
@@ -709,6 +744,10 @@ function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null, tab
 
   return {
     state: gameStateName(pokerState),
+    tableProtocolState: protocolType(protocolStateOr(
+      game,
+      TableProtocolState.handInProgress({ handId: game?.clientState?.hand_id }),
+    )),
     seat,
     pot: Number(hand.betting_state?.pot?.toString?.() ?? 0),
     minBet: safeCallAmount(hand, viewerPlayerIndex),
@@ -900,10 +939,10 @@ function cheatReportFromError(error, fallbackPlayer = null) {
 
 export function usePokerTable({
   table,
-  networkSnapshot,
-  publishMessage,
-  prepareNetworkSession,
-  prepareHandSession,
+  networkSnapshot: injectedNetworkSnapshot,
+  publishMessage: injectedPublishMessage,
+  prepareNetworkSession: injectedPrepareNetworkSession,
+  prepareHandSession: injectedPrepareHandSession,
   onOperatorTopUp,
 } = {}) {
   const [snapshot, setSnapshot] = useState({
@@ -958,11 +997,27 @@ export function usePokerTable({
   const tableId = table?.tableData?.id;
   const lobbyId = table?.lobbyId;
   const tableMaxSeats = table?.tableData?.maxSeats;
+  const tableCurrentHand = Number(table?.tableData?.currentHand ?? 0);
+  const tableCurrentHandRef = useRef(tableCurrentHand);
+  tableCurrentHandRef.current = tableCurrentHand;
   const currentSeatNo = table?.currentSeat?.seatNo;
+  const fallbackTokenRing = useMemo(() => new VirtualTokenRing({
+    currentSeatNo,
+    seatCount: Number(tableMaxSeats || tableSeats.length || 0),
+  }), [currentSeatNo, tableMaxSeats, tableSeats.length]);
+  const tokenRing = table?.tokenRing?.ring ?? fallbackTokenRing;
+  const tokenRingTransport = table?.tokenRing;
+  const publishTokenMessage = injectedPublishMessage ?? tokenRingTransport?.publishMessage;
+  const tokenRingSnapshot = injectedNetworkSnapshot ?? tokenRingTransport?.networkSnapshot;
+  const prepareTokenNetworkSession = injectedPrepareNetworkSession
+    ?? tokenRingTransport?.prepareNetworkSession;
+  const prepareTokenHandSession = injectedPrepareHandSession
+    ?? tokenRingTransport?.prepareHandSession;
   const {
     buildNextFinalVerification,
     buildNextTableAggregatePublicKeyVerification,
     setTableAggregatePublicKeyOnChain,
+    startHandOnChain,
     submitFinalHandOnChain,
   } = useFinalVerification({ onOperatorTopUp });
 
@@ -1002,11 +1057,29 @@ export function usePokerTable({
     const numPlayers = Number(tableMaxSeats || 0);
     if (!numPlayers || tableId == null) return null;
 
+    const chainCurrentHand = Number.isFinite(tableCurrentHandRef.current)
+      ? tableCurrentHandRef.current
+      : 0;
+    const previousGame = gameRef.current;
+    const previousHand = previousGame?.clientState?.current_hand?.();
+    const recoveredHandState = chainCurrentHand > 0
+      && Number(previousGame?.clientState?.hand_id ?? 0) === chainCurrentHand
+      && previousHand
+      && !previousHand.get_current_state?.().is_finished?.();
+    const initialProtocolState = chainCurrentHand === 0
+      ? TableProtocolState.tableAggregatePublicKey()
+      : recoveredHandState
+        ? TableProtocolState.handInProgress({
+          handId: chainCurrentHand,
+          handSetup: previousGame?.currentHandSetup ?? null,
+        })
+        : TableProtocolState.startHand({ handId: chainCurrentHand + 1 });
     const pokerTable = makePokerTable(numPlayers);
+    pokerTable.hand_number = chainCurrentHand;
     const clientState = PokerClientState.new(
       currentSeatNo ?? 0,
       Number(tableId),
-      HAND_ID,
+      chainCurrentHand,
       pokerTable,
     );
     gameRef.current = {
@@ -1020,19 +1093,20 @@ export function usePokerTable({
       handKeyHandId: null,
       handKeys: new Map(),
       publicKeySubmissions: new Map(),
-      tableAggregatePublicKeySubmitted: false,
+      tableProtocolState: initialProtocolState,
       tableAggregatePublicKeyPromise: null,
       tableAggregatePublicKey: null,
       tableAggregatePublicKeyPublicKeyShares: [],
       tableAggregatePublicKeySignatureShares: [],
       tableAggregatePublicKeyDigest: null,
+      startHandPromise: null,
       finalVerificationSignatureShares: [],
       finalVerificationDigest: null,
       finalHandSettlement: null,
-      finalVerificationSubmitted: false,
+      finalVerificationSettlementTx: null,
       currentHandSetup: {
-        hand_id: HAND_ID,
-        hand_number: HAND_ID,
+        hand_id: chainCurrentHand,
+        hand_number: chainCurrentHand,
         initial_chips: Array(numPlayers).fill(INITIAL_CHIPS),
         small_blind: SMALL_BLIND,
         dealer_button: 0,
@@ -1101,14 +1175,14 @@ export function usePokerTable({
       && game.tableSignaturePublicKey
       && Number(game.handKeyHandId) === targetHandNumber
     ) return game;
-    if (currentSeatNo == null || (!prepareHandSession && !prepareNetworkSession)) return null;
+    if (currentSeatNo == null || (!prepareTokenHandSession && !prepareTokenNetworkSession)) return null;
 
     const tableKeys = game.tableKeys
-      ?? (prepareNetworkSession ? await prepareNetworkSession() : null);
+      ?? (prepareTokenNetworkSession ? await prepareTokenNetworkSession() : null);
     const cachedKeys = game.handKeys?.get(targetHandNumber);
     const keys = cachedKeys
-      ?? (prepareHandSession
-        ? await prepareHandSession(targetHandNumber)
+      ?? (prepareTokenHandSession
+        ? await prepareTokenHandSession(targetHandNumber)
         : tableKeys);
     if (!cachedKeys) {
       const handKeys = game.handKeys ?? new Map();
@@ -1132,7 +1206,7 @@ export function usePokerTable({
     };
     gameRef.current = nextGame;
     return nextGame;
-  }, [currentSeatNo, prepareHandSession, prepareNetworkSession, resetGame]);
+  }, [currentSeatNo, prepareTokenHandSession, prepareTokenNetworkSession, resetGame]);
 
   const requiredTableAggregateSeats = useCallback(() => {
     const requiredSeats = Number(tableMaxSeats || tableSeats.length || 0);
@@ -1148,8 +1222,12 @@ export function usePokerTable({
   }, [tableMaxSeats, tableSeats]);
 
   const publishTableAggregatePublicKeyMessage = useCallback((game, tableAggregateVerification) => {
-    publishMessage({
+    const nextPlayer = Number.isFinite(Number(tableAggregateVerification.nextSeat))
+      ? Number(tableAggregateVerification.nextSeat)
+      : null;
+    publishTokenMessage({
       type: TABLE_AGGREGATE_PUBLIC_KEY_MESSAGE,
+      ...tokenRing.messageFields(game, { currentPlayer: nextPlayer }),
       lobby_id: lobbyId?.toString?.() ?? String(lobbyId ?? ''),
       table_id: tableId?.toString?.() ?? String(tableId ?? ''),
       aggregate_public_key: tableAggregateVerification.aggregatePublicKey,
@@ -1159,10 +1237,198 @@ export function usePokerTable({
       signer_seats: tableAggregateVerification.signerSeats,
       aggregate_signature: tableAggregateVerification.aggregateSignature,
     });
-  }, [lobbyId, publishMessage, tableId]);
+  }, [lobbyId, publishTokenMessage, tableId, tokenRing]);
+
+  const requiredStartHandSeats = useCallback(() => (
+    Number(tableMaxSeats || tableSeats.length || 0)
+  ), [tableMaxSeats, tableSeats.length]);
+
+  const nextOnChainHandId = useCallback((game) => (
+    Number(startHandState(game, Number(game?.clientState?.hand_id ?? 0) + 1).handId
+      ?? Number(game?.clientState?.hand_id ?? 0) + 1)
+  ), []);
+
+  const recordStartHandConfirmation = useCallback((game, seatNo, handId, hash = null) => {
+    if (!game || seatNo == null) return false;
+    const targetHandId = Number(handId ?? nextOnChainHandId(game));
+    const state = startHandState(game, targetHandId);
+    const confirmations = (state.confirmations ?? [])
+      .filter((entry) => Number(entry.hand_id) === targetHandId);
+    if (confirmations.some((entry) => Number(entry.seat_no) === Number(seatNo))) {
+      transitionTableProtocol(game, TableProtocolState.startHand({
+        handId: targetHandId,
+        confirmations,
+      }));
+      return false;
+    }
+    confirmations.push({
+      seat_no: Number(seatNo),
+      hand_id: targetHandId,
+      tx: hash,
+    });
+    transitionTableProtocol(game, TableProtocolState.startHand({
+      handId: targetHandId,
+      confirmations,
+    }));
+    return true;
+  }, [nextOnChainHandId]);
+
+  const startHandRoundComplete = useCallback((game, handId = null) => {
+    const requiredSeats = requiredStartHandSeats();
+    const targetHandId = Number(handId ?? nextOnChainHandId(game));
+    if (!game || requiredSeats <= 0) return false;
+    const confirmedSeats = new Set(
+      (startHandState(game, targetHandId).confirmations ?? [])
+        .filter((entry) => Number(entry.hand_id) === targetHandId)
+        .map((entry) => Number(entry.seat_no)),
+    );
+    return confirmedSeats.size >= requiredSeats;
+  }, [nextOnChainHandId, requiredStartHandSeats]);
+
+  const markOnChainHandStarted = useCallback((game, handId) => {
+    const targetHandId = Number(handId);
+    if (!game || !targetHandId) return;
+    const currentHand = game.clientState.current_hand?.();
+    const currentHandId = Number(game.clientState.hand_id ?? 0);
+    const needsLocalNextHand = currentHand?.get_current_state?.().is_finished?.()
+      && targetHandId >= currentHandId;
+    if (needsLocalNextHand) {
+      const nextStacks = finalHandStacks(currentHand);
+      const initialChips = nextStacks.length > 0
+        ? nextStacks
+        : Array(game.clientState.table.get_current_player_count()).fill(INITIAL_CHIPS);
+      const smallBlind = currentHand.get_small_blind();
+      const dealerSeatNumber = nextDealerSeatNumber(game.clientState.table);
+      game.clientState.table.start_hand(initialChips, smallBlind, dealerSeatNumber);
+      game.currentHandSetup = {
+        hand_id: targetHandId,
+        hand_number: targetHandId,
+        initial_chips: initialChips.map((chips) => Number(chips)),
+        small_blind: smallBlind,
+        dealer_button: dealerSeatNumber,
+      };
+    }
+    if (Number(game.clientState.hand_id ?? 0) < targetHandId) {
+      game.clientState.hand_id = targetHandId;
+      game.clientState.sequence = 0;
+      game.clientState.seen.clear();
+      game.clientState.table.hand_number = targetHandId;
+    }
+    game.currentHandSetup ??= {
+      hand_id: targetHandId,
+      hand_number: targetHandId,
+      initial_chips: Array(requiredStartHandSeats()).fill(INITIAL_CHIPS),
+      small_blind: SMALL_BLIND,
+      dealer_button: 0,
+    };
+    game.currentHandSetup.hand_id = targetHandId;
+    game.currentHandSetup.hand_number = targetHandId;
+    game.signingKey = null;
+    game.publicKey = null;
+    game.handKeyHandId = null;
+    game.shuffleTrace = null;
+    game.publicKeySubmissions = new Map();
+    game.finalVerificationSignatureShares = [];
+    game.finalVerificationDigest = null;
+    game.finalHandSettlement = null;
+    game.finalVerificationSettlementTx = null;
+    game.seenFinished = false;
+    handHistoryRef.current = [];
+    seenHistoryTipsRef.current = new Set();
+    protocolActionInFlightRef.current = null;
+    finalVerificationInFlightRef.current = false;
+    transitionTableProtocol(game, TableProtocolState.handInProgress({
+      handId: targetHandId,
+      handSetup: game.currentHandSetup,
+    }));
+  }, [requiredStartHandSeats]);
+
+  const publishStartHandMessage = useCallback((game, hash = null, handId = null) => {
+    const targetHandId = Number(handId ?? nextOnChainHandId(game));
+    const currentPlayer = hash
+      ? tokenRing.nextSeatAfter(game?.clientState?.player_index, requiredStartHandSeats())
+      : 0;
+    publishTokenMessage({
+      type: START_HAND_MESSAGE,
+      ...tokenRing.messageFields(game, {
+        currentHand: targetHandId,
+        currentPlayer,
+      }),
+      lobby_id: lobbyId?.toString?.() ?? String(lobbyId ?? ''),
+      table_id: tableId?.toString?.() ?? String(tableId ?? ''),
+      hand_id: targetHandId,
+      hand_number: targetHandId,
+      seat_no: hash ? game?.clientState?.player_index : null,
+      tx: hash,
+      confirmations: startHandState(game, targetHandId).confirmations ?? [],
+    });
+  }, [lobbyId, nextOnChainHandId, publishTokenMessage, requiredStartHandSeats, tableId, tokenRing]);
+
+  const ensureOnChainStartHand = useCallback(async (game) => {
+    if (!game) return false;
+    const targetHandId = nextOnChainHandId(game);
+    if (protocolType(game) === TABLE_PROTOCOL_STATE_HAND_IN_PROGRESS) {
+      return true;
+    }
+    if (startHandRoundComplete(game, targetHandId)) {
+      markOnChainHandStarted(game, targetHandId);
+      return true;
+    }
+    if (game.startHandPromise) return game.startHandPromise;
+    if (startHandState(game, targetHandId).confirmations?.some((entry) => (
+      Number(entry.seat_no) === Number(game.clientState.player_index)
+      && Number(entry.hand_id) === targetHandId
+    ))) {
+      transitionTableProtocol(game, startHandState(game, targetHandId));
+      return false;
+    }
+    if (!lobbyId || !tableId) return false;
+    if (!game.operatorPrivateKey) {
+      throw new Error('Missing operator key for start hand submit.');
+    }
+
+    transitionTableProtocol(game, startHandState(game, targetHandId));
+    const startPromise = (async () => {
+      const hash = await startHandOnChain({
+        lobbyId,
+        tableId,
+        operatorPrivateKey: game.operatorPrivateKey,
+      });
+      recordStartHandConfirmation(game, game.clientState.player_index, targetHandId, hash);
+      appendGameLog(`Start hand submitted on-chain: ${hash}`, 'Game');
+      publishStartHandMessage(game, hash, targetHandId);
+      if (startHandRoundComplete(game, targetHandId)) {
+        markOnChainHandStarted(game, targetHandId);
+        return true;
+      }
+      return false;
+    })();
+
+    game.startHandPromise = startPromise;
+    try {
+      return await startPromise;
+    } finally {
+      game.startHandPromise = null;
+    }
+  }, [
+    appendGameLog,
+    lobbyId,
+    markOnChainHandStarted,
+    nextOnChainHandId,
+    publishStartHandMessage,
+    recordStartHandConfirmation,
+    startHandOnChain,
+    startHandRoundComplete,
+    tableId,
+  ]);
 
   const submitTableAggregatePublicKeyRound = useCallback(async (game, incoming = null) => {
-    if (!game || game.tableAggregatePublicKeySubmitted) return Boolean(game?.tableAggregatePublicKeySubmitted);
+    if (!game) return false;
+    if (protocolType(game) !== TABLE_PROTOCOL_STATE_TABLE_AGGREGATE_PUBLIC_KEY) {
+      return protocolType(game) === TABLE_PROTOCOL_STATE_START_HAND
+        || protocolType(game) === TABLE_PROTOCOL_STATE_HAND_IN_PROGRESS
+        || protocolType(game) === TABLE_PROTOCOL_STATE_TABLE_COMPLETE;
+    }
     if (!lobbyId || !tableId) return false;
     if (!game.operatorPrivateKey) {
       throw new Error('Missing operator key for table aggregate public key submit.');
@@ -1192,9 +1458,14 @@ export function usePokerTable({
     game.tableAggregatePublicKeySignatureShares = tableAggregateVerification.signatureShares;
     game.tableAggregatePublicKeyDigest = tableAggregateVerification.tableAggregatePublicKeyDigest;
     game.tableAggregatePublicKey = tableAggregateVerification.aggregatePublicKey;
+    transitionTableProtocol(game, TableProtocolState.tableAggregatePublicKey({
+      publicKeyShares: tableAggregateVerification.publicKeyShares,
+      signatureShares: tableAggregateVerification.signatureShares,
+      aggregatePublicKey: tableAggregateVerification.aggregatePublicKey,
+      digest: tableAggregateVerification.tableAggregatePublicKeyDigest,
+    }));
 
     if (tableAggregateVerification.complete && !tableAggregateVerification.signed) {
-      game.tableAggregatePublicKeySubmitted = true;
       return true;
     }
 
@@ -1210,7 +1481,7 @@ export function usePokerTable({
       senderForSeat(game.clientState.player_index),
     );
 
-    if (tableAggregateVerification.complete && !game.tableAggregatePublicKeySubmitted) {
+    if (tableAggregateVerification.complete) {
       const { hash, aggregatePublicKey } = await setTableAggregatePublicKeyOnChain({
         lobbyId,
         tableId,
@@ -1219,11 +1490,15 @@ export function usePokerTable({
         operatorPrivateKey: game.operatorPrivateKey,
       });
       game.tableAggregatePublicKey = aggregatePublicKey;
-      game.tableAggregatePublicKeySubmitted = true;
+      const nextHandId = Number(game.clientState.hand_id ?? 0) + 1;
+      transitionTableProtocol(game, TableProtocolState.startHand({
+        handId: nextHandId,
+        confirmations: [],
+      }));
       appendGameLog(hash
         ? `Table aggregate public key submitted on-chain: ${hash}`
         : 'Table aggregate public key already set on-chain');
-      publishTableAggregatePublicKeyMessage(game, tableAggregateVerification);
+      publishStartHandMessage(game, null, nextHandId);
       return true;
     }
 
@@ -1237,15 +1512,19 @@ export function usePokerTable({
     requiredTableAggregateSeats,
     senderForSeat,
     setTableAggregatePublicKeyOnChain,
+    publishStartHandMessage,
     tableId,
   ]);
 
   const ensureTableAggregatePublicKey = useCallback(async (game) => {
     if (!game) return false;
-    if (game.tableAggregatePublicKeySubmitted) return true;
+    if (protocolType(game) !== TABLE_PROTOCOL_STATE_TABLE_AGGREGATE_PUBLIC_KEY) return true;
     if (game.tableAggregatePublicKeyPromise) return game.tableAggregatePublicKeyPromise;
-    if (Number(game.clientState?.hand_id ?? HAND_ID) !== HAND_ID) {
-      game.tableAggregatePublicKeySubmitted = true;
+    if (Number(game.clientState?.hand_id ?? 0) > 0) {
+      transitionTableProtocol(game, TableProtocolState.handInProgress({
+        handId: Number(game.clientState.hand_id),
+        handSetup: game.currentHandSetup,
+      }));
       return true;
     }
 
@@ -1330,8 +1609,12 @@ export function usePokerTable({
     if (wire.nop) {
       wire.sequence_number = latestHandHistorySequence;
     }
+    const handFinished = game?.clientState?.current_hand?.()?.get_current_state?.()?.is_finished?.() === true;
     const message = {
       type: HISTORY_MESSAGE,
+      ...tokenRing.messageFields(game, {
+        currentPlayer: handFinished ? 0 : undefined,
+      }),
       table_id: wire.table_id,
       hand_id: wire.hand_id,
       hand_number: wire.hand_id,
@@ -1342,11 +1625,12 @@ export function usePokerTable({
       hand_history: handHistory,
       wire: encodeWire(wire),
     };
-    publishMessage(message);
+    publishTokenMessage(message);
   }, [
-    publishMessage,
+    publishTokenMessage,
     rememberHistoryEntry,
     signWireHistoryEntry,
+    tokenRing,
   ]);
 
   const applyDebugCheatsToWire = useCallback((wire, game) => {
@@ -1381,10 +1665,14 @@ export function usePokerTable({
     const chatText = text?.trim();
     if (!chatText) return false;
 
-    publishMessage({ type: CHAT_MESSAGE, text: chatText });
+    publishTokenMessage({
+      type: CHAT_MESSAGE,
+      ...tokenRing.messageFields(gameRef.current),
+      text: chatText,
+    });
     appendGameLog(chatText, 'Me');
     return true;
-  }, [appendGameLog, publishMessage]);
+  }, [appendGameLog, publishTokenMessage, tokenRing]);
 
   const armPokerDebugCheat = useCallback((name) => {
     switch (name) {
@@ -1511,13 +1799,21 @@ export function usePokerTable({
     }
   }, []);
 
-  const publishFinalVerificationMessage = useCallback((game, finalVerification) => {
-    publishMessage({
-      type: FINAL_VERIFICATION_MESSAGE,
+  const publishSettleHandMessage = useCallback((game, finalVerification, handId = null) => {
+    const messageHandId = handId ?? game?.clientState?.hand_id;
+    const nextPlayer = Number.isFinite(Number(finalVerification.nextSeat))
+      ? Number(finalVerification.nextSeat)
+      : null;
+    publishTokenMessage({
+      type: SETTLE_HAND_MESSAGE,
+      ...tokenRing.messageFields(game, {
+        currentHand: Number(messageHandId),
+        currentPlayer: nextPlayer,
+      }),
       lobby_id: lobbyId?.toString?.() ?? String(lobbyId ?? ''),
       table_id: tableId?.toString?.() ?? String(tableId ?? ''),
-      hand_id: game?.clientState?.hand_id,
-      hand_number: game?.clientState?.hand_id,
+      hand_id: messageHandId,
+      hand_number: messageHandId,
       hand_setup: game?.currentHandSetup ?? null,
       hand_history: [...(handHistoryRef.current ?? [])],
       final_hand_digest: finalVerification.finalHandDigest,
@@ -1529,13 +1825,21 @@ export function usePokerTable({
       aggregate_public_key: finalVerification.aggregatePublicKey,
       settlement: finalVerification.settlementMessage ?? null,
     });
-  }, [lobbyId, publishMessage, tableId]);
+  }, [lobbyId, publishTokenMessage, tableId, tokenRing]);
 
   const submitFinalVerificationRound = useCallback(async (game, incoming = null) => {
     const hand = game?.clientState?.current_hand?.();
     if (!game || !hand?.get_current_state?.().is_finished?.()) return false;
     if (finalVerificationInFlightRef.current) return false;
 
+    const handId = game.clientState.hand_id ?? HAND_ID;
+    if (protocolType(game) !== TABLE_PROTOCOL_STATE_SETTLE_HAND) {
+      transitionTableProtocol(game, TableProtocolState.settleHand({ handId }));
+    }
+    const state = settleHandState(game, handId);
+    if (state.tx && Number(state.handId) === Number(handId)) {
+      return true;
+    }
     finalVerificationInFlightRef.current = true;
     try {
       const incomingSignatureShares = Array.isArray(incoming) ? incoming : incoming?.signatureShares;
@@ -1543,11 +1847,14 @@ export function usePokerTable({
       const publicKeyShares = incomingPublicKeyShares
         ?? game.tableAggregatePublicKeyPublicKeyShares
         ?? [];
-      const signatureShares = incomingSignatureShares ?? game.finalVerificationSignatureShares ?? [];
+      const signatureShares = incomingSignatureShares
+        ?? state.signatureShares
+        ?? game.finalVerificationSignatureShares
+        ?? [];
       const finalVerification = buildNextFinalVerification({
         lobbyId,
         tableId,
-        handId: game.clientState.hand_id ?? HAND_ID,
+        handId,
         hand,
         handSetup: game.currentHandSetup,
         handHistoryEntries: handHistoryRef.current,
@@ -1562,6 +1869,14 @@ export function usePokerTable({
 
       game.finalVerificationSignatureShares = finalVerification.signatureShares;
       game.finalVerificationDigest = finalVerification.finalHandDigest;
+      game.finalHandSettlement = finalVerification.settlementMessage;
+      transitionTableProtocol(game, TableProtocolState.settleHand({
+        handId,
+        publicKeyShares: finalVerification.publicKeyShares,
+        signatureShares: finalVerification.signatureShares,
+        digest: finalVerification.finalHandDigest,
+        settlement: finalVerification.settlementMessage,
+      }));
       if (playerCompletedFinalSettlement(game, game.clientState.player_index)) {
         game.finalHandSettlement = finalVerification.settlementMessage;
       }
@@ -1573,20 +1888,45 @@ export function usePokerTable({
         senderForSeat(game.clientState.player_index),
       );
 
-      if (finalVerification.complete && !game.finalVerificationSubmitted) {
+      if (finalVerification.complete) {
         const hash = await submitFinalHandOnChain({
           lobbyId,
           tableId,
-          handId: game.clientState.hand_id ?? HAND_ID,
+          handId,
           finalVerification,
           operatorPrivateKey: game.operatorPrivateKey,
         });
-        game.finalVerificationSubmitted = true;
+        game.finalVerificationSettlementTx = hash;
         appendGameLog(`Final hand settlement submitted on-chain: ${hash}`);
+        const nextStacks = finalHandStacks(hand);
+        const playersWithChips = nextStacks.filter((chips) => Number(chips) > 0).length;
+        if (playersWithChips <= 1) {
+          transitionTableProtocol(game, TableProtocolState.tableComplete({
+            handId,
+            settlement: finalVerification.settlementMessage,
+            tx: hash,
+          }));
+        } else {
+          const nextHandId = Number(handId) + 1;
+          transitionTableProtocol(game, TableProtocolState.startHand({
+            handId: nextHandId,
+            confirmations: [],
+          }));
+          publishStartHandMessage(game, null, nextHandId);
+        }
+        transitionTableProtocol(game, {
+          ...game.tableProtocolState,
+          tx: hash,
+        });
+        return true;
       }
-      publishFinalVerificationMessage(game, finalVerification);
+      publishSettleHandMessage(game, finalVerification, handId);
       return true;
     } catch (error) {
+      transitionTableProtocol(game, TableProtocolState.handDisputed({
+        handId,
+        reason: formatChainError(error),
+      }));
       appendGameLog(
         `Final verification failed: ${formatChainError(error)}`,
         'Game',
@@ -1600,7 +1940,8 @@ export function usePokerTable({
     appendGameLog,
     buildNextFinalVerification,
     lobbyId,
-    publishFinalVerificationMessage,
+    publishSettleHandMessage,
+    publishStartHandMessage,
     senderForSeat,
     submitFinalHandOnChain,
     tableId,
@@ -1608,9 +1949,25 @@ export function usePokerTable({
   ]);
 
   const submitProtocolAction = useCallback(async () => {
-    const game = await ensureKeys();
+    let game = await ensureKeys();
     if (!game) return null;
     if (!await ensureTableAggregatePublicKey(game)) return null;
+    const stateType = protocolType(game);
+    if (stateType === TABLE_PROTOCOL_STATE_HAND_DISPUTED || stateType === TABLE_PROTOCOL_STATE_TABLE_COMPLETE) {
+      updateView({ force: true });
+      return null;
+    }
+    if (stateType === TABLE_PROTOCOL_STATE_SETTLE_HAND) {
+      await submitFinalVerificationRound(game);
+      updateView({ force: true });
+      return null;
+    }
+    if (stateType === TABLE_PROTOCOL_STATE_START_HAND && !await ensureOnChainStartHand(game)) {
+      updateView({ force: true });
+      return null;
+    }
+    game = await ensureKeys(gameRef.current?.clientState?.hand_id ?? game.clientState.hand_id);
+    if (!game) return null;
     const hand = game.clientState.current_hand();
     if (!hand) return null;
 
@@ -1664,7 +2021,12 @@ export function usePokerTable({
           traces: built.action.traces,
         });
         if (hand.get_current_state().current_state === POKER_HAND_STATE_FINISHED) {
-          await submitFinalVerificationRound(game);
+          transitionTableProtocol(game, TableProtocolState.settleHand({
+            handId: game.clientState.hand_id,
+          }));
+          if (game.clientState.player_index === 0) {
+            await submitFinalVerificationRound(game);
+          }
         }
         game.shuffleTrace = null;
       }
@@ -1678,6 +2040,7 @@ export function usePokerTable({
     buildAutomaticAction,
     ensureKeys,
     ensureTableAggregatePublicKey,
+    ensureOnChainStartHand,
     submitAction,
     submitNop,
     submitFinalVerificationRound,
@@ -1685,116 +2048,37 @@ export function usePokerTable({
   ]);
 
   useEffect(() => {
-    if (snapshot.currentGameState?.state !== 'Finished') return;
+    if (snapshot.currentGameState?.tableProtocolState !== TABLE_PROTOCOL_STATE_SETTLE_HAND) return;
     submitFinalVerificationRound(gameRef.current);
-  }, [snapshot.currentGameState?.state, submitFinalVerificationRound]);
+  }, [snapshot.currentGameState?.tableProtocolState, submitFinalVerificationRound]);
 
   const startNextHand = useCallback(() => {
     const game = gameRef.current;
-    const hand = game?.clientState.current_hand();
-    if (!game || !hand?.get_current_state().is_finished()) return false;
-
-    const nextStacks = finalHandStacks(hand);
-    const initialChips = nextStacks.length > 0
-      ? nextStacks
-      : Array(game.clientState.table.get_current_player_count()).fill(INITIAL_CHIPS);
-    const playerIndex = game.clientState.player_index;
-    const playerChips = Number(initialChips[playerIndex] ?? 0);
-    const playersWithChips = initialChips.filter((chips) => Number(chips) > 0).length;
-
-    if (playerChips <= 0) {
-      setTerminalResult({ type: 'lose', chips: 0 });
-      updateView({ force: true });
-      return false;
-    }
-
-    if (playersWithChips === 1) {
-      setTerminalResult({ type: 'win', chips: playerChips });
-      updateView({ force: true });
-      return false;
-    }
-
-    const smallBlind = hand.get_small_blind();
-    const dealerSeatNumber = nextDealerSeatNumber(game.clientState.table);
-
-    game.clientState.table.start_hand(initialChips, smallBlind, dealerSeatNumber);
-    game.clientState.hand_id += 1;
-    game.clientState.sequence = 0;
-    game.clientState.seen.clear();
-    game.currentHandSetup = {
-      hand_id: game.clientState.hand_id,
-      hand_number: game.clientState.hand_id,
-      initial_chips: initialChips.map((chips) => Number(chips)),
-      small_blind: smallBlind,
-      dealer_button: dealerSeatNumber,
-    };
-    game.signingKey = null;
-    game.publicKey = null;
-    game.handKeyHandId = null;
-    game.shuffleTrace = null;
-    game.publicKeySubmissions = new Map();
-    game.finalVerificationSignatureShares = [];
-    game.finalVerificationDigest = null;
-    game.finalHandSettlement = null;
-    game.finalVerificationSubmitted = false;
-    game.seenFinished = false;
-    handHistoryRef.current = [];
-    seenHistoryTipsRef.current = new Set();
-    protocolActionInFlightRef.current = null;
-    finalVerificationInFlightRef.current = false;
-
+    if (!game || protocolType(game) !== TABLE_PROTOCOL_STATE_START_HAND) return false;
+    const handId = Number(startHandState(game).handId ?? nextOnChainHandId(game));
+    if (!startHandRoundComplete(game, handId)) return false;
+    markOnChainHandStarted(game, handId);
     const events = game.clientState.table.drain_events?.() ?? [];
     appendTraceLines(eventDisplayLines(events), game.clientState.player_index);
     updateView({ force: true });
     return true;
-  }, [appendTraceLines, updateView]);
+  }, [
+    appendTraceLines,
+    markOnChainHandStarted,
+    nextOnChainHandId,
+    startHandRoundComplete,
+    updateView,
+  ]);
 
-  const bootstrapHandFromSetup = useCallback(async (game, handSetup) => {
-    const targetHandId = Number(handSetup?.hand_number ?? handSetup?.hand_id ?? 0);
-    const numPlayers = Number(tableMaxSeats || 0);
-    if (!game || !targetHandId || !numPlayers) return false;
-    if (targetHandId <= Number(game.clientState.hand_id ?? 0)) return true;
-
-    const pokerTable = makePokerTableForHand(numPlayers, handSetup);
-    game.clientState.table = pokerTable;
-    game.clientState.hand_id = targetHandId;
-    game.clientState.sequence = 0;
-    game.clientState.seen.clear();
-    game.signingKey = null;
-    game.publicKey = null;
-    game.handKeyHandId = null;
-    game.shuffleTrace = null;
-    game.publicKeySubmissions = new Map();
-    game.finalVerificationSignatureShares = [];
-    game.finalVerificationDigest = null;
-    game.finalHandSettlement = null;
-    game.finalVerificationSubmitted = false;
-    game.seenFinished = false;
-    game.currentHandSetup = {
-      hand_id: targetHandId,
-      hand_number: targetHandId,
-      initial_chips: [...(handSetup.initial_chips ?? [])].map((chips) => Number(chips)),
-      small_blind: Number(handSetup.small_blind ?? SMALL_BLIND),
-      dealer_button: Number(handSetup.dealer_button ?? 0),
-    };
-    handHistoryRef.current = [];
-    seenHistoryTipsRef.current = new Set();
-    protocolActionInFlightRef.current = null;
-    finalVerificationInFlightRef.current = false;
-    await ensureKeys(targetHandId);
-    updateView({ force: true });
-    return true;
-  }, [ensureKeys, tableMaxSeats, updateView]);
-
-  const advanceToHistoryHand = useCallback(async (game, targetHandId, handSetup) => {
+  const advanceToHistoryHand = useCallback(async (game, targetHandId) => {
     while (targetHandId > game.clientState.hand_id) {
       if (startNextHand()) continue;
-      return bootstrapHandFromSetup(game, handSetup);
+      return false;
     }
     return true;
-  }, [bootstrapHandFromSetup, startNextHand]);
+  }, [startNextHand]);
 
-  const applyHistoryEntries = useCallback(async (historyEntries = [], playerAddress = null, handSetup = null) => {
+  const applyHistoryEntries = useCallback(async (historyEntries = [], playerAddress = null, tokenMessage = null) => {
     const game = gameRef.current ?? resetGame();
     if (!game || !Array.isArray(historyEntries)) return true;
 
@@ -1817,7 +2101,7 @@ export function usePokerTable({
         continue;
       }
 
-      if (!await advanceToHistoryHand(game, Number(wire.hand_id), handSetup)) return true;
+      if (!await advanceToHistoryHand(game, Number(wire.hand_id))) return true;
       if (wire.hand_id !== game.clientState.hand_id) continue;
       await ensureKeys(wire.hand_id);
 
@@ -1853,7 +2137,12 @@ export function usePokerTable({
             traces: wire.action.traces,
           });
           if (game.clientState.current_hand()?.get_current_state?.().is_finished?.()) {
-            await submitFinalVerificationRound(game);
+            transitionTableProtocol(game, TableProtocolState.settleHand({
+              handId: game.clientState.hand_id,
+            }));
+            if (tokenRing.targetsCurrentSeat(tokenMessage ?? entry?.wire ?? wire)) {
+              await submitFinalVerificationRound(game);
+            }
           }
         }
         const displayLines = wire.log_lines?.length > 0
@@ -1893,6 +2182,7 @@ export function usePokerTable({
     advanceToHistoryHand,
     senderForAddress,
     submitFinalVerificationRound,
+    tokenRing,
     updateView,
     verifyHistoryEntrySignature,
   ]);
@@ -1948,21 +2238,29 @@ export function usePokerTable({
     if (
       message?.type !== HISTORY_MESSAGE
       && message?.type !== CHAT_MESSAGE
+      && message?.type !== START_HAND_MESSAGE
       && message?.type !== TABLE_AGGREGATE_PUBLIC_KEY_MESSAGE
-      && message?.type !== FINAL_VERIFICATION_MESSAGE
+      && message?.type !== SETTLE_HAND_MESSAGE
     ) return false;
+
+    const game = gameRef.current ?? resetGame();
+    if (game) tokenRing.applyCursor(game, message);
 
     if (message.type === CHAT_MESSAGE) {
       appendGameLog(message.text ?? '', senderForAddress(playerAddress));
       return true;
     }
 
-    const game = gameRef.current ?? resetGame();
     if (!game) return true;
 
     if (message.type === TABLE_AGGREGATE_PUBLIC_KEY_MESSAGE) {
       try {
+        if (!tokenRing.targetsCurrentSeat(message)) {
+          updateView({ force: true });
+          return true;
+        }
         const keyedGame = await ensureKeys();
+        tokenRing.applyCursor(keyedGame ?? game, message);
         const submitted = await submitTableAggregatePublicKeyRound(
           keyedGame ?? game,
           {
@@ -1971,7 +2269,7 @@ export function usePokerTable({
           },
         );
         updateView({ force: true });
-        if (submitted && currentSeatNo === 0) {
+        if (submitted && currentSeatNo === 0 && protocolType(keyedGame ?? game) === TABLE_PROTOCOL_STATE_START_HAND) {
           await continueAfterPokerMessage();
         }
       } catch (error) {
@@ -1985,19 +2283,74 @@ export function usePokerTable({
       return true;
     }
 
-    const messageHandNumber = Number(message.hand_number ?? message.hand_id ?? game.clientState.hand_id);
-    await ensureKeys(messageHandNumber);
+    if (message.type === START_HAND_MESSAGE) {
+      try {
+        if (!tokenRing.targetsCurrentSeat(message)) {
+          updateView({ force: true });
+          return true;
+        }
+        const keyedGame = await ensureKeys(Number(message.hand_number ?? message.hand_id ?? HAND_ID));
+        const targetGame = keyedGame ?? game;
+        tokenRing.applyCursor(targetGame, message);
+        transitionTableProtocol(targetGame, TableProtocolState.startHand({
+          handId: Number(message.hand_number ?? message.hand_id ?? HAND_ID),
+          confirmations: message.confirmations ?? startHandState(targetGame).confirmations ?? [],
+        }));
+        if (message.seat_no != null && message.tx) {
+          recordStartHandConfirmation(
+            targetGame,
+            Number(message.seat_no),
+            Number(message.hand_number ?? message.hand_id ?? HAND_ID),
+            message.tx,
+          );
+        }
+        const complete = await ensureOnChainStartHand(targetGame);
+        if (complete && currentSeatNo === 0) {
+          await continueAfterPokerMessage();
+        }
+        updateView({ force: true });
+      } catch (error) {
+        appendGameLog(
+          `Start hand failed: ${formatChainError(error)}`,
+          'Game',
+          'error',
+        );
+        updateView({ force: true });
+      }
+      return true;
+    }
+
+    const messageHandNumber = Number(
+      message.current_hand
+      ?? message.hand_number
+      ?? message.hand_id
+      ?? game.clientState.hand_id,
+    );
+    const keyedGame = await ensureKeys(messageHandNumber);
+    const targetGame = keyedGame ?? game;
+    tokenRing.applyCursor(targetGame, message);
 
     const handHistory = Array.isArray(message.hand_history)
       ? message.hand_history
       : [];
     if (handHistory.length > 0) {
-      const appliedHistory = await applyHistoryEntries(handHistory, playerAddress, message.hand_setup);
+      const appliedHistory = await applyHistoryEntries(handHistory, playerAddress, message);
       if (!appliedHistory) return true;
     }
 
-    if (message.type === FINAL_VERIFICATION_MESSAGE) {
-      await submitFinalVerificationRound(game, {
+    if (message.type === SETTLE_HAND_MESSAGE) {
+      if (!tokenRing.targetsCurrentSeat(message)) {
+        updateView({ force: true });
+        return true;
+      }
+      transitionTableProtocol(targetGame, TableProtocolState.settleHand({
+        handId: messageHandNumber,
+        publicKeyShares: message.public_key_shares ?? [],
+        signatureShares: message.signature_shares ?? [],
+        digest: message.final_hand_digest ?? null,
+        settlement: message.settlement ?? null,
+      }));
+      await submitFinalVerificationRound(targetGame, {
         publicKeyShares: message.public_key_shares ?? [],
         signatureShares: message.signature_shares ?? [],
       });
@@ -2006,11 +2359,15 @@ export function usePokerTable({
     }
 
     const wire = decodeWire(message.wire);
-    if (!await advanceToHistoryHand(game, Number(wire.hand_id), message.hand_setup)) return true;
+    if (!await advanceToHistoryHand(targetGame, Number(wire.hand_id))) return true;
     await ensureKeys(wire.hand_id);
 
     if (wire.nop) {
-      game.clientState.apply_nop_wire(wire);
+      targetGame.clientState.apply_nop_wire(wire);
+      if (!tokenRing.targetsCurrentSeat(message)) {
+        updateView({ force: true });
+        return true;
+      }
       return continueAfterPokerMessage({ sync: message.sync === true });
     }
 
@@ -2018,6 +2375,10 @@ export function usePokerTable({
       wireHistoryKey(entry?.wire) === wireHistoryKey(encodeWire(wire))
     ));
     if (wireAlreadyInHistory) {
+      if (!tokenRing.targetsCurrentSeat(message)) {
+        updateView({ force: true });
+        return true;
+      }
       return continueAfterPokerMessage({ sync: message.sync === true });
     }
 
@@ -2025,7 +2386,7 @@ export function usePokerTable({
     let appliedResult;
     try {
       envelope = wire.to_envelope();
-      appliedResult = game.clientState.apply_envelope_result(envelope);
+      appliedResult = targetGame.clientState.apply_envelope_result(envelope);
     } catch (error) {
       const report = cheatReportFromError(error, wire?.action?.player);
       if (report) {
@@ -2047,14 +2408,23 @@ export function usePokerTable({
         ? wire.log_lines
         : eventDisplayLines(result?.events);
       appendTraceLines(displayLines, envelope.from);
-      const hand = game.clientState.current_hand();
+      const hand = targetGame.clientState.current_hand();
       const handState = hand?.get_current_state();
       if (handState?.is_finished()) {
-        await submitFinalVerificationRound(game);
+        transitionTableProtocol(targetGame, TableProtocolState.settleHand({
+          handId: targetGame.clientState.hand_id,
+        }));
+        if (tokenRing.targetsCurrentSeat(message)) {
+          await submitFinalVerificationRound(targetGame);
+        }
         updateView({ force: true });
         return true;
       }
 
+      if (!tokenRing.targetsCurrentSeat(message)) {
+        updateView({ force: true });
+        return true;
+      }
       return continueAfterPokerMessage({ sync: message.sync === true });
     }
     return true;
@@ -2065,18 +2435,27 @@ export function usePokerTable({
     applyHistoryEntries,
     continueAfterPokerMessage,
     currentSeatNo,
+    ensureOnChainStartHand,
     ensureKeys,
+    recordStartHandConfirmation,
     resetGame,
     senderForAddress,
     submitFinalVerificationRound,
     submitTableAggregatePublicKeyRound,
+    tokenRing,
     updateView,
   ]);
 
   const submitBet = useCallback(async (amount) => {
-    const game = await ensureKeys();
+    let game = await ensureKeys();
     if (!game) return;
     if (!await ensureTableAggregatePublicKey(game)) return;
+    if (!await ensureOnChainStartHand(game)) {
+      updateView({ force: true });
+      return;
+    }
+    game = await ensureKeys(gameRef.current?.clientState?.hand_id ?? game.clientState.hand_id);
+    if (!game) return;
     const hand = game.clientState.current_hand();
     const state = hand?.get_current_state();
     if (!state || state.current_state !== POKER_HAND_STATE_BET) return;
@@ -2089,12 +2468,18 @@ export function usePokerTable({
       PokerAction.SubmitBet({ player, amount: cappedAmount }),
       [`Player ${player + 1} Bet: $${cappedAmount}`],
     );
-  }, [ensureKeys, ensureTableAggregatePublicKey, submitAction]);
+  }, [ensureKeys, ensureOnChainStartHand, ensureTableAggregatePublicKey, submitAction, updateView]);
 
   const submitBlind = useCallback(async () => {
-    const game = await ensureKeys();
+    let game = await ensureKeys();
     if (!game) return;
     if (!await ensureTableAggregatePublicKey(game)) return;
+    if (!await ensureOnChainStartHand(game)) {
+      updateView({ force: true });
+      return;
+    }
+    game = await ensureKeys(gameRef.current?.clientState?.hand_id ?? game.clientState.hand_id);
+    if (!game) return;
     const hand = game.clientState.current_hand();
     const state = hand?.get_current_state();
     if (!state) return;
@@ -2115,7 +2500,7 @@ export function usePokerTable({
         [`Big Blind on Player ${player + 1}`],
       );
     }
-  }, [ensureKeys, ensureTableAggregatePublicKey, submitAction]);
+  }, [ensureKeys, ensureOnChainStartHand, ensureTableAggregatePublicKey, submitAction, updateView]);
 
   const completeCheatCountdown = useCallback(() => {
     const report = cheatReportRef.current;
@@ -2133,16 +2518,16 @@ export function usePokerTable({
   }, [updateView]);
 
   useEffect(() => {
-    if (networkSnapshot?.status !== 'connected') return;
+    if (tokenRingSnapshot?.status !== 'connected') return;
     if (table?.currentSeat?.seatNo == null) return;
     ensureKeys().then(() => {
       updateView();
     });
-  }, [ensureKeys, networkSnapshot?.status, table?.currentSeat?.seatNo, updateView]);
+  }, [ensureKeys, tokenRingSnapshot?.status, table?.currentSeat?.seatNo, updateView]);
 
   useEffect(() => {
-    const connected = networkSnapshot?.inboundState === 'Connected'
-      && networkSnapshot?.outboundState === 'Connected';
+    const connected = tokenRingSnapshot?.inboundState === 'Connected'
+      && tokenRingSnapshot?.outboundState === 'Connected';
     const wasConnected = previousConnectedRef.current;
     previousConnectedRef.current = connected;
 
@@ -2151,10 +2536,20 @@ export function usePokerTable({
       return;
     }
 
-    if (wasConnected && gameRef.current?.tableAggregatePublicKeySubmitted) return;
+    if (
+      wasConnected
+      && protocolType(gameRef.current) !== TABLE_PROTOCOL_STATE_TABLE_AGGREGATE_PUBLIC_KEY
+    ) return;
 
     ensureKeys().then(async (game) => {
       if (!game) return;
+      if (
+        protocolType(game) === TABLE_PROTOCOL_STATE_TABLE_AGGREGATE_PUBLIC_KEY
+        && currentSeatNo !== 0
+      ) {
+        updateView({ force: true });
+        return;
+      }
       if (!await ensureTableAggregatePublicKey(game)) return;
       if (pendingHistorySyncRef.current) {
         pendingHistorySyncRef.current = false;
@@ -2178,8 +2573,8 @@ export function usePokerTable({
     currentSeatNo,
     ensureKeys,
     ensureTableAggregatePublicKey,
-    networkSnapshot?.inboundState,
-    networkSnapshot?.outboundState,
+    tokenRingSnapshot?.inboundState,
+    tokenRingSnapshot?.outboundState,
     sendHistorySync,
     updateView,
   ]);

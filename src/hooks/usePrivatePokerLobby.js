@@ -5,6 +5,7 @@ import { LOBBY_CONTRACT_ADDRESS } from '@/lib/chain';
 import { fromChipUnits } from '@/lib/constants';
 import { getBufferedGasOverrides } from '@/lib/gas';
 import { publicPokerClient } from '@/lib/publicPokerClient';
+import { logWriteTransactionError, waitForLoggedTransactionReceipt } from '@/lib/tx_console';
 import { useOperatorAddress } from '@/hooks/useOperatorAddress';
 import { usePublicContractEvent } from '@/hooks/usePublicContractEvent';
 
@@ -48,25 +49,46 @@ export function usePrivatePokerLobby({ onOperatorTopUp } = {}) {
     };
 
     const writeLobbyContract = async ({ functionName, args, operatorPrivateKey }) => {
-        if (operatorPrivateKey) {
-            return writeContractFromOperator({
-                operatorPrivateKey,
-                contract: LOBBY_CONTRACT_ADDRESS,
-                abi: LOBBY_ABI,
+        let hash;
+        try {
+            if (operatorPrivateKey) {
+                hash = await writeContractFromOperator({
+                    operatorPrivateKey,
+                    contract: LOBBY_CONTRACT_ADDRESS,
+                    abi: LOBBY_ABI,
+                    functionName,
+                    args,
+                });
+            } else {
+                const overrides = await getWriteOverrides({ functionName, args });
+
+                hash = await mutateAsync({
+                    address: LOBBY_CONTRACT_ADDRESS,
+                    abi: LOBBY_ABI,
+                    functionName,
+                    args,
+                    ...overrides,
+                });
+            }
+
+            await waitForLoggedTransactionReceipt({
+                hash,
                 functionName,
+                contract: LOBBY_CONTRACT_ADDRESS,
                 args,
             });
+            return hash;
+        } catch (error) {
+            if (!hash) {
+                logWriteTransactionError({
+                    functionName,
+                    contract: LOBBY_CONTRACT_ADDRESS,
+                    args,
+                    error,
+                });
+            }
+            throw error;
         }
-
-        const overrides = await getWriteOverrides({ functionName, args });
-
-        return await mutateAsync({
-            address: LOBBY_CONTRACT_ADDRESS,
-            abi: LOBBY_ABI,
-            functionName,
-            args,
-            ...overrides,
-        });
     };
 
     // --- DECODERS ---
@@ -109,6 +131,7 @@ export function usePrivatePokerLobby({ onOperatorTopUp } = {}) {
                     { name: 'tableBuyin', type: 'uint256' },
                     { name: 'tablePlayerCount', type: 'uint256' },
                     { name: 'tableTotalBuyin', type: 'uint256' },
+                    { name: 'tableCurrentHand', type: 'uint256' },
                     { name: 'tableName', type: 'string' }
                 ]
             }],
@@ -121,6 +144,7 @@ export function usePrivatePokerLobby({ onOperatorTopUp } = {}) {
             buyIn: fromChipUnits(table.tableBuyin),
             playerCount: Number(table.tablePlayerCount),
             totalBuyIn: fromChipUnits(table.tableTotalBuyin),
+            currentHand: Number(table.tableCurrentHand),
             name: table.tableName,
         };
     };
@@ -197,6 +221,7 @@ export function usePrivatePokerLobby({ onOperatorTopUp } = {}) {
                             { name: 'tableBuyin', type: 'uint256' },
                             { name: 'tablePlayerCount', type: 'uint256' },
                             { name: 'tableTotalBuyin', type: 'uint256' },
+                            { name: 'tableCurrentHand', type: 'uint256' },
                             { name: 'tableName', type: 'string' }
                         ]
                     },
@@ -230,6 +255,7 @@ export function usePrivatePokerLobby({ onOperatorTopUp } = {}) {
                 buyIn: fromChipUnits(detail.info.tableBuyin),
                 playerCount: Number(detail.info.tablePlayerCount),
                 totalBuyIn: fromChipUnits(detail.info.tableTotalBuyin),
+                currentHand: Number(detail.info.tableCurrentHand),
                 name: detail.info.tableName,
             },
             players: detail.players.map(p => ({

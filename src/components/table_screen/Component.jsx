@@ -91,7 +91,7 @@ export default function TableScreen({
   const hasDimOverlay = Children.toArray(children).length > 0;
   const communityCards = parseCards(tableData?.current_hand?.community_cards);
   const showResult = Boolean(gameState?.resultText);
-  const showNextHandCountdown = showResult && Boolean(gameState?.canStartNextHand);
+  const showNextHandCountdown = false;
   const isCheatResult = Boolean(gameState?.cheat);
   const winnerAddress = gameState?.resultWinner == null
     ? null

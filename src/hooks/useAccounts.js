@@ -17,6 +17,7 @@ import { formatChainError } from '@/lib/chain/errors';
 import { SUBSCRIPTION_TIERS } from '@/lib/constants';
 import { getBufferedGasOverrides } from '@/lib/gas';
 import { publicPokerClient } from '@/lib/publicPokerClient';
+import { logWriteTransactionError, waitForLoggedTransactionReceipt } from '@/lib/tx_console';
 import { useOperatorAddress } from '@/hooks/useOperatorAddress';
 
 const PPDC_SCALE = 1_000_000n;
@@ -103,18 +104,37 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     if (!accountSession || !blobHex || !isAddress(PRIVATE_POKER_CONTRACT_ADDRESS)) return;
 
     const operator = createOperatorAddress(accountSession.operatorPrivateKey);
-    const updateHash = await operator.writeContract({
-      contract: PRIVATE_POKER_CONTRACT_ADDRESS,
-      abi: ACCOUNT_ABI,
-      functionName: 'updateAccount',
-      args: [
-        accountSession.walletAddress,
-        accountSession.operator,
-        accountSession.operatorBlsPublicKey ?? '0x',
-        blobHex,
-      ],
-    });
-    await publicPokerClient.waitForTransactionReceipt({ hash: updateHash });
+    const args = [
+      accountSession.walletAddress,
+      accountSession.operator,
+      accountSession.operatorBlsPublicKey ?? '0x',
+      blobHex,
+    ];
+    let updateHash;
+    try {
+      updateHash = await operator.writeContract({
+        contract: PRIVATE_POKER_CONTRACT_ADDRESS,
+        abi: ACCOUNT_ABI,
+        functionName: 'updateAccount',
+        args,
+      });
+      await waitForLoggedTransactionReceipt({
+        hash: updateHash,
+        functionName: 'updateAccount',
+        contract: PRIVATE_POKER_CONTRACT_ADDRESS,
+        args,
+      });
+    } catch (error) {
+      if (!updateHash) {
+        logWriteTransactionError({
+          functionName: 'updateAccount',
+          contract: PRIVATE_POKER_CONTRACT_ADDRESS,
+          args,
+          error,
+        });
+      }
+      throw error;
+    }
   }, [accountSession, createOperatorAddress]);
 
   const loadAccountFromChain = useCallback(async (walletAddress, session) => {
@@ -329,14 +349,32 @@ export function useAccounts({ playerAddresses = [] } = {}) {
       args,
       account: session.walletAddress,
     });
-    const hash = await writeWalletContract({
-      address: PPDC_CONTRACT_ADDRESS,
-      abi: PPDC_ABI,
-      functionName: 'approve',
-      args,
-      ...overrides,
-    });
-    await publicPokerClient.waitForTransactionReceipt({ hash });
+    let hash;
+    try {
+      hash = await writeWalletContract({
+        address: PPDC_CONTRACT_ADDRESS,
+        abi: PPDC_ABI,
+        functionName: 'approve',
+        args,
+        ...overrides,
+      });
+      await waitForLoggedTransactionReceipt({
+        hash,
+        functionName: 'approve',
+        contract: PPDC_CONTRACT_ADDRESS,
+        args,
+      });
+    } catch (error) {
+      if (!hash) {
+        logWriteTransactionError({
+          functionName: 'approve',
+          contract: PPDC_CONTRACT_ADDRESS,
+          args,
+          error,
+        });
+      }
+      throw error;
+    }
   }, [writeWalletContract]);
 
   const handleContinue = useCallback(async () => {
@@ -369,28 +407,66 @@ export function useAccounts({ playerAddresses = [] } = {}) {
       await approveOperatorPpdc(session, amount);
 
       setSubscriptionStep(`Operator transfers ${PPDC} into PrivatePoker...`);
-      const transferHash = await operator.writeContract({
-        contract: PPDC_CONTRACT_ADDRESS,
-        abi: PPDC_ABI,
-        functionName: 'transferFrom',
-        args: [session.walletAddress, PRIVATE_POKER_CONTRACT_ADDRESS, amount],
-      });
-      await publicPokerClient.waitForTransactionReceipt({ hash: transferHash });
+      const transferArgs = [session.walletAddress, PRIVATE_POKER_CONTRACT_ADDRESS, amount];
+      let transferHash;
+      try {
+        transferHash = await operator.writeContract({
+          contract: PPDC_CONTRACT_ADDRESS,
+          abi: PPDC_ABI,
+          functionName: 'transferFrom',
+          args: transferArgs,
+        });
+        await waitForLoggedTransactionReceipt({
+          hash: transferHash,
+          functionName: 'transferFrom',
+          contract: PPDC_CONTRACT_ADDRESS,
+          args: transferArgs,
+        });
+      } catch (error) {
+        if (!transferHash) {
+          logWriteTransactionError({
+            functionName: 'transferFrom',
+            contract: PPDC_CONTRACT_ADDRESS,
+            args: transferArgs,
+            error,
+          });
+        }
+        throw error;
+      }
 
       setSubscriptionStep('Operator creates account...');
-      const subscribeHash = await operator.writeContract({
-        contract: PRIVATE_POKER_CONTRACT_ADDRESS,
-        abi: ACCOUNT_ABI,
-        functionName: 'subscribe',
-        args: [
-          session.walletAddress,
-          session.operator,
-          session.operatorBlsPublicKey ?? '0x',
-          profileBlob,
-          tierToContractId(selectedTier),
-        ],
-      });
-      await publicPokerClient.waitForTransactionReceipt({ hash: subscribeHash });
+      const subscribeArgs = [
+        session.walletAddress,
+        session.operator,
+        session.operatorBlsPublicKey ?? '0x',
+        profileBlob,
+        tierToContractId(selectedTier),
+      ];
+      let subscribeHash;
+      try {
+        subscribeHash = await operator.writeContract({
+          contract: PRIVATE_POKER_CONTRACT_ADDRESS,
+          abi: ACCOUNT_ABI,
+          functionName: 'subscribe',
+          args: subscribeArgs,
+        });
+        await waitForLoggedTransactionReceipt({
+          hash: subscribeHash,
+          functionName: 'subscribe',
+          contract: PRIVATE_POKER_CONTRACT_ADDRESS,
+          args: subscribeArgs,
+        });
+      } catch (error) {
+        if (!subscribeHash) {
+          logWriteTransactionError({
+            functionName: 'subscribe',
+            contract: PRIVATE_POKER_CONTRACT_ADDRESS,
+            args: subscribeArgs,
+            error,
+          });
+        }
+        throw error;
+      }
 
       setHasOnchainAccount(true);
       setIsSubscriptionActive(true);

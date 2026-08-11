@@ -3,6 +3,7 @@ import { useConnection, useSendTransaction } from 'wagmi';
 import { OPERATOR_GAS_MAX_TOPUP, OPERATOR_GAS_TOPUP_FACTOR } from '../lib/constants.js';
 import { OperatorAddress } from '../lib/OperatorAddress.js';
 import { publicPokerClient } from '../lib/publicPokerClient.js';
+import { logWriteTransactionError, waitForLoggedTransactionReceipt } from '../lib/tx_console.js';
 
 const FALLBACK_GAS_TOKEN_TRANSFER_GAS = 100_000n;
 
@@ -70,16 +71,35 @@ export function useOperatorAddress({ onOperatorTopUp } = {}) {
       amountWei: topUpAmount.toString(),
       gasOverrides,
     });
-    const hash = await sendTransactionAsync({
-      to: operator,
-      value: topUpAmount,
-      ...gasOverrides,
-    });
-    console.log('operator top-up transaction sent', {
-      operator,
-      hash,
-    });
-    await publicPokerClient.waitForTransactionReceipt({ hash });
+    const args = [operator, topUpAmount];
+    let hash;
+    try {
+      hash = await sendTransactionAsync({
+        to: operator,
+        value: topUpAmount,
+        ...gasOverrides,
+      });
+      console.log('operator top-up transaction sent', {
+        operator,
+        hash,
+      });
+      await waitForLoggedTransactionReceipt({
+        hash,
+        functionName: 'operatorTopUp',
+        contract: operator,
+        args,
+      });
+    } catch (error) {
+      if (!hash) {
+        logWriteTransactionError({
+          functionName: 'operatorTopUp',
+          contract: operator,
+          args,
+          error,
+        });
+      }
+      throw error;
+    }
     console.log('operator top-up confirmed', {
       operator,
       hash,

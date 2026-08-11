@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAccountSession } from '@/contexts/AccountSessionContext.jsx';
 import { usePrivatePokerLobby } from '@/hooks/usePrivatePokerLobby';
-import { useNetwork } from '@/hooks/useNetwork';
+import { useTokenRing } from '@/hooks/useTokenRing.js';
 import { CHAIN_POLLING_INTERVAL } from '@/lib/chain';
 
 const mapTableDetail = (detail) => ({
@@ -10,6 +10,7 @@ const mapTableDetail = (detail) => ({
   gameType: detail.info.gameType ?? 1,
   buyin: detail.info.buyIn,
   maxSeats: detail.info.flags,
+  currentHand: Number(detail.info.currentHand ?? 0),
   players: detail.players,
   current_hand: { min_bet: 10, max_bet: 100, bet_step: 10, community_cards: '' },
 });
@@ -72,25 +73,33 @@ export function useTable({
     tableId: activeTableId,
     tableName,
     buyIn: liveTableData?.buyin,
+    currentHand: liveTableData?.currentHand,
     blinds: liveTableData?.blinds,
     stakesLabel: liveTableData?.stakes,
-  }), [activeTableId, lobbyId, liveTableData?.blinds, liveTableData?.buyin, liveTableData?.stakes, tableName]);
+  }), [activeTableId, lobbyId, liveTableData?.blinds, liveTableData?.buyin, liveTableData?.currentHand, liveTableData?.stakes, tableName]);
   const subscribedPrecedingPeerKeyRef = useRef(null);
+  const mySeatNo = useMemo(() => (
+    seats.find((seat) => normalizeAddress(seat.playerAddress) === normalizeAddress(playerAddress))?.seatNo ?? null
+  ), [playerAddress, seats]);
 
   const onSeat = useCallback((seatNo, seatEvent) => {
     onSeatEventRef.current?.(seatNo, seatEvent);
   }, []);
 
-  const network = useNetwork({
-    tableId: activeTableId,
-    lobbyId,
-    tableDetails: tableSessionDetails,
-    seats,
-    onActivity,
-    onOperatorTopUp,
-    isTableFull,
-    tableCapacity,
-    localMediaStream,
+  const tokenRing = useTokenRing({
+    currentSeatNo: mySeatNo,
+    seatCount: tableCapacity,
+    network: {
+      tableId: activeTableId,
+      lobbyId,
+      tableDetails: tableSessionDetails,
+      seats,
+      onActivity,
+      onOperatorTopUp,
+      isTableFull,
+      tableCapacity,
+      localMediaStream,
+    },
   });
 
   const [
@@ -103,11 +112,7 @@ export function useTable({
     armDuplicateNextMessage,
     prepareHandSession,
     pokeInboundConnection,
-  ] = network;
-
-  const mySeatNo = useMemo(() => (
-    seats.find((seat) => normalizeAddress(seat.playerAddress) === normalizeAddress(playerAddress))?.seatNo ?? null
-  ), [playerAddress, seatsKey]);
+  ] = tokenRing;
 
   const previousSeat = useMemo(() => {
     if (mySeatNo === null) return null;
@@ -119,7 +124,7 @@ export function useTable({
     if (myOccupiedSeatIndex < 0) return null;
 
     return occupiedSeats[(myOccupiedSeatIndex - 1 + occupiedSeats.length) % occupiedSeats.length];
-  }, [mySeatNo, seatsKey]);
+  }, [mySeatNo, seats]);
 
   const previousSeatNo = previousSeat?.seatNo ?? null;
   const subscriptionKey = [
@@ -256,7 +261,8 @@ export function useTable({
     setIsSeated,
     refresh: () => setRefreshTrigger((current) => current + 1),
     hasJoinedTable: isSeated === true,
-    network,
+    network: tokenRing,
+    tokenRing,
     networkSnapshot,
     lobbyId,
     playerNetworkStates: networkSnapshot?.peerStates ?? {},

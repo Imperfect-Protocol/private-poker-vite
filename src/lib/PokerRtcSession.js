@@ -351,6 +351,9 @@ export class PokerRtcSession {
       if (sent) {
         announced.add(targetKey);
         this.logActivity(`gossip announce ${formatPeer(targetAddress)}`);
+        this.emitActivity(`${formatSeat(targetAddress)} <~ Searching...`);
+      } else {
+        this.emitActivity(`${formatSeat(targetAddress)} <! Unavailable`);
       }
     });
     return announced;
@@ -365,6 +368,9 @@ export class PokerRtcSession {
     if (!playerAddress || !lobbyId || !tableId || unresolved.length === 0) return;
 
     this.logActivity(`mesh discovery fallback for ${unresolved.map(formatPeer).join(', ')}`);
+    unresolved.forEach((peerAddress) => {
+      this.emitActivity(`${formatSeat(peerAddress)} << Searching...`);
+    });
     void announcePrivateMesh({
       originAddress: playerAddress,
       lobbyId,
@@ -407,6 +413,12 @@ export class PokerRtcSession {
   getSnapshot() {
     const firstInbound = Array.from(this.inboundSubscriptions.values())[0] ?? null;
     const firstOutbound = Array.from(this.outboundSubscriptions.values())[0] ?? null;
+    const firstInboundConnected = firstInbound
+      ? this.connectedLinks.has(linkKey(firstInbound.playerAddress, RTC_LINK.INBOUND))
+      : false;
+    const firstOutboundConnected = firstOutbound
+      ? this.connectedLinks.has(linkKey(firstOutbound.playerAddress, RTC_LINK.OUTBOUND))
+      : false;
     const peerStates = {};
 
     this.config.players.forEach((player) => {
@@ -462,8 +474,8 @@ export class PokerRtcSession {
       connectedPeerAddresses: Array.from(this.connectedPeers),
       connectedPeerCount: this.connectedPeers.size,
       expectedPeerCount: this.inboundSubscriptions.size,
-      inboundState: firstInbound?.state ?? 'None',
-      outboundState: firstOutbound?.state ?? 'None',
+      inboundState: firstInboundConnected ? SUBSCRIPTION_STATE.CONNECTED : firstInbound?.state ?? 'None',
+      outboundState: firstOutboundConnected ? SUBSCRIPTION_STATE.CONNECTED : firstOutbound?.state ?? 'None',
       inboundPeerAddress: firstInbound?.playerAddress ?? null,
       outboundPeerAddress: firstOutbound?.playerAddress ?? null,
       peerStates,

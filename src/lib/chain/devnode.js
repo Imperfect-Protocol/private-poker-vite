@@ -12,7 +12,6 @@ export const chainConfig = {
     privatePoker: {
       default: 5_000_000n,
       functions: {
-        setTableAggregatePublicKey: 10_000_000n,
         settleHand: 25_000_000n,
       },
     },

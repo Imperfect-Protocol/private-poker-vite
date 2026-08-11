@@ -4,6 +4,7 @@ import { useConnection, useWriteContract } from 'wagmi';
 import { PRIVATE_POKER_CONTRACT_ADDRESS } from '../lib/chain/index.js';
 import { getBufferedGasOverrides } from '../lib/gas.js';
 import { publicPokerClient } from '../lib/publicPokerClient.js';
+import { logWriteTransactionError, waitForLoggedTransactionReceipt } from '../lib/tx_console.js';
 import { useOperatorAddress } from './useOperatorAddress.js';
 import {
   bytesToHex,
@@ -22,6 +23,7 @@ export const FINAL_VERIFICATION_SIGNATURE_SCHEME = 'BLS12-381-FINAL-HAND-DIGEST-
 export const TABLE_AGGREGATE_PUBLIC_KEY_SIGNATURE_SCHEME = 'BLS12-381-TABLE-AGGREGATE-PUBLIC-KEY-V1';
 
 export const SETTLER_ABI = parseAbi([
+  'function startHand(uint256 lobby_id, uint256 table_id)',
   'function setTableAggregatePublicKey(uint256 lobby_id, uint256 table_id, bytes aggregate_public_key, bytes aggregate_signature)',
   'function settleHand(uint256 lobby_id, uint256 table_id, uint256 hand_id, uint256 pot_size, uint256[] pot_split, uint256[] chips_balances, bytes digest, bytes aggregate_signature)',
 ]);
@@ -829,37 +831,59 @@ export function useFinalVerification({ onOperatorTopUp } = {}) {
     operatorPrivateKey,
   }) => {
     let hash;
-    if (operatorPrivateKey) {
-      hash = await writeContractFromOperator({
-        operatorPrivateKey,
-        contract: PRIVATE_POKER_CONTRACT_ADDRESS,
-        abi: SETTLER_ABI,
-        functionName,
-        args,
-      });
-      await publicPokerClient.waitForTransactionReceipt({ hash });
-      return hash;
-    }
+    try {
+      if (operatorPrivateKey) {
+        hash = await writeContractFromOperator({
+          operatorPrivateKey,
+          contract: PRIVATE_POKER_CONTRACT_ADDRESS,
+          abi: SETTLER_ABI,
+          functionName,
+          args,
+        });
+        await waitForLoggedTransactionReceipt({
+          hash,
+          functionName,
+          contract: PRIVATE_POKER_CONTRACT_ADDRESS,
+          args,
+        });
+        return hash;
+      }
 
-    const overrides = address
-      ? await getBufferedGasOverrides(publicPokerClient, {
+      const overrides = address
+        ? await getBufferedGasOverrides(publicPokerClient, {
+          address: PRIVATE_POKER_CONTRACT_ADDRESS,
+          abi: SETTLER_ABI,
+          functionName,
+          args,
+          account: address,
+        })
+        : {};
+
+      hash = await mutateAsync({
         address: PRIVATE_POKER_CONTRACT_ADDRESS,
         abi: SETTLER_ABI,
         functionName,
         args,
-        account: address,
-      })
-      : {};
-
-    hash = await mutateAsync({
-      address: PRIVATE_POKER_CONTRACT_ADDRESS,
-      abi: SETTLER_ABI,
-      functionName,
-      args,
-      ...overrides,
-    });
-    await publicPokerClient.waitForTransactionReceipt({ hash });
-    return hash;
+        ...overrides,
+      });
+      await waitForLoggedTransactionReceipt({
+        hash,
+        functionName,
+        contract: PRIVATE_POKER_CONTRACT_ADDRESS,
+        args,
+      });
+      return hash;
+    } catch (error) {
+      if (!hash) {
+        logWriteTransactionError({
+          functionName,
+          contract: PRIVATE_POKER_CONTRACT_ADDRESS,
+          args,
+          error,
+        });
+      }
+      throw error;
+    }
   }, [address, mutateAsync, writeContractFromOperator]);
 
   const submitFinalHandOnChain = useCallback(async ({
@@ -917,10 +941,23 @@ export function useFinalVerification({ onOperatorTopUp } = {}) {
     }
   }, [writePrivatePokerContract]);
 
+  const startHandOnChain = useCallback(async ({
+    lobbyId,
+    tableId,
+    operatorPrivateKey,
+  }) => (
+    writePrivatePokerContract({
+      functionName: 'startHand',
+      args: [BigInt(lobbyId), BigInt(tableId)],
+      operatorPrivateKey,
+    })
+  ), [writePrivatePokerContract]);
+
   return {
     buildNextFinalVerification: buildNextFinalVerificationCallback,
     buildNextTableAggregatePublicKeyVerification: buildNextTableAggregatePublicKeyVerificationCallback,
     setTableAggregatePublicKeyOnChain,
+    startHandOnChain,
     submitFinalHandOnChain,
   };
 }
