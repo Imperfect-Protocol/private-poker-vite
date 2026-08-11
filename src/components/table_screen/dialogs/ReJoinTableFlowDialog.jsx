@@ -84,11 +84,9 @@ export default function ReJoinTableFlowDialog({
   const inboundStatus = peerConnectionStatus(networkSnapshot?.inboundState);
   const outboundStatus = subscriptionStatus(networkSnapshot?.outboundState);
   const isInboundConnected = networkSnapshot?.inboundState === 'Connected';
-  const isOutboundConnected = networkSnapshot?.outboundState === 'Connected';
   const isRtcConnecting = isRtcConnectingState(networkSnapshot?.inboundState);
   const canPokeInbound = signatureStatus === 'active'
     && !isInboundConnected
-    && isOutboundConnected
     && !isSearchCycleActive;
   const shownInboundStatus = isInboundConnected
     ? 'connected'

@@ -1149,6 +1149,11 @@ export class PokerRtcSession {
       this.emitActivity(`${formatSeat(peerAddress)} !! Disconnected ${formatKey(this.getPlayerPublicKey(peerAddress))}`);
     }
 
+    if (direction === RTC_LINK.INBOUND && subscription && this.config.isTableFull) {
+      this.lookingForPeers.add(peerKey);
+      this.schedulePeerDiscovery();
+    }
+
     queueMicrotask(() => {
       this.resetLinks.delete(key);
     });

@@ -29,9 +29,21 @@ function getRandomMeshEndpoint() {
 async function sendAndPoll(url, lobbyId, tableId, peer, messages, callback) {
   const queue = [...messages];
   let keepAlive = true;
+  let sagaId = '';
+
+  const attachSagaId = (message) => {
+    if (!sagaId || !message || typeof message !== 'object') return message;
+    if (Array.isArray(message)) return message.map(attachSagaId);
+    return {
+      ...message,
+      saga_id: message.saga_id ?? message.sagaId ?? sagaId,
+    };
+  };
 
   const enqueueFn = (m) => {
-    if (m) queue.push(m);
+    if (m) {
+      queue.push(async () => attachSagaId(typeof m === 'function' ? await m() : await m));
+    }
   };
 
   try {
@@ -42,11 +54,12 @@ async function sendAndPoll(url, lobbyId, tableId, peer, messages, callback) {
 
       for (const item of rawOutbound) {
         const resolved = typeof item === 'function' ? await item() : await item;
-        if (resolved) {
-          if (Array.isArray(resolved)) {
-            outbound.push(...resolved);
+        const withSagaId = attachSagaId(resolved);
+        if (withSagaId) {
+          if (Array.isArray(withSagaId)) {
+            outbound.push(...withSagaId);
           } else {
-            outbound.push(resolved);
+            outbound.push(withSagaId);
           }
         }
       }
@@ -58,6 +71,7 @@ async function sendAndPoll(url, lobbyId, tableId, peer, messages, callback) {
           lobbyId: String(lobbyId),
           tableId: String(tableId),
           peer: normalizeAddress(peer),
+          saga_id: sagaId,
           messages: outbound,
         }),
       });
@@ -67,6 +81,10 @@ async function sendAndPoll(url, lobbyId, tableId, peer, messages, callback) {
       }
 
       const body = await response.json().catch(() => null);
+      const responseSagaId = body?.saga_id ?? body?.sagaId;
+      if (typeof responseSagaId === 'string' && responseSagaId) {
+        sagaId = responseSagaId;
+      }
       const inboundMessages = Array.isArray(body?.messages) ? body.messages : [];
 
       for (const msg of inboundMessages) {
@@ -84,6 +102,7 @@ async function sendAndPoll(url, lobbyId, tableId, peer, messages, callback) {
             lobbyId: msg.lobbyId,
             tableId: msg.tableId,
             recipient: normalizeAddress(peer),
+            saga_id: msg.saga_id ?? msg.sagaId ?? sagaId,
           };
         } else if (msg.type === 'p2p-route-available') {
           inboundMessage = {
@@ -93,6 +112,7 @@ async function sendAndPoll(url, lobbyId, tableId, peer, messages, callback) {
             lobbyId: msg.lobbyId,
             tableId: msg.tableId,
             recipient: normalizeAddress(peer),
+            saga_id: msg.saga_id ?? msg.sagaId ?? sagaId,
           };
         } else if (msg.signal) {
           inboundMessage = msg.signal;
