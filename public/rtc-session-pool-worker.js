@@ -2,6 +2,8 @@ const ports = new Map();
 const sessions = new Map();
 let nextPortId = 1;
 
+const RTC_POOL_GOSSIP_ANNOUNCE = 'RTC_POOL_GOSSIP_ANNOUNCE';
+const RTC_POOL_GOSSIP_TRIGGER_OFFER = 'RTC_POOL_GOSSIP_TRIGGER_OFFER';
 const STALE_PORT_MS = 15000;
 const PRUNE_INTERVAL_MS = 5000;
 
@@ -200,6 +202,43 @@ self.onconnect = (event) => {
       broadcast({
         type: 'SCATTER_RTC_POOL_SIGNAL',
         signal: message.signal,
+        fromSharedWorker: true,
+      }, portId);
+      return;
+    }
+
+    if (message?.type === RTC_POOL_GOSSIP_ANNOUNCE || message?.type === RTC_POOL_GOSSIP_TRIGGER_OFFER) {
+      const targetKey = sessionKey({
+        playerAddress: message.targetAddress,
+        lobbyId: message.lobbyId,
+        tableId: message.tableId,
+        endpoint: 'table',
+      });
+      const targetPortIds = getTargetPortIds(targetKey, portId);
+      const targetPortId = postFirstLiveTarget(targetPortIds, {
+        ...message,
+        fromSharedWorker: true,
+      });
+
+      if (targetPortId != null) {
+        logWorker('direct gossip control route', {
+          messageId: message.id,
+          type: message.type,
+          fromPortId: portId,
+          targetPortId,
+          skippedDuplicatePorts: Math.max(targetPortIds.length - 1, 0),
+        });
+        return;
+      }
+
+      logWorker('direct gossip route unavailable, scattering', {
+        messageId: message.id,
+        type: message.type,
+        from: formatPeer(message.originAddress),
+        to: formatPeer(message.targetAddress),
+      });
+      broadcast({
+        ...message,
         fromSharedWorker: true,
       }, portId);
       return;

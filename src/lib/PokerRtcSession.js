@@ -6,7 +6,12 @@ import {
   sign as blsSign,
   verify as blsVerify,
 } from '@/lib/crum_bls';
-import { RTC_POOL_SIGNAL, rtcSessionPool } from '@/lib/RtcSessionPool';
+import {
+  RTC_POOL_GOSSIP_ANNOUNCE,
+  RTC_POOL_GOSSIP_TRIGGER_OFFER,
+  RTC_POOL_SIGNAL,
+  rtcSessionPool,
+} from '@/lib/RtcSessionPool';
 import { announcePrivateMesh } from '@/lib/privateMesh';
 
 const ICE_SERVERS = [
@@ -58,6 +63,7 @@ const SUBSCRIPTION_STATE = {
 const RTC_CONTROL_MESSAGE = 'RTC_CONTROL';
 const TRANSPORT_SIGNATURE_SCHEME = 'BLS12-381-G2-PK-G1-SIG';
 const MAX_PUBLISHED_MESSAGE_CACHE = 200;
+const GOSSIP_DISCOVERY_FALLBACK_MS = 1200;
 
 const normalizeAddress = (value) => value?.toLowerCase() ?? '';
 const linkKey = (peerAddress, direction) => `${direction}:${normalizeAddress(peerAddress)}`;
@@ -216,6 +222,7 @@ export class PokerRtcSession {
     this.snapshotKey = '';
     this.lookingForPeers = new Set();
     this.announceTimer = null;
+    this.gossipFallbackTimers = new Map();
     this.config = {
       playerAddress: undefined,
       operator: undefined,
@@ -276,7 +283,7 @@ export class PokerRtcSession {
     this.logJoins();
     this.sessionPool.registerSession(this);
     this.updateConnectedPeers();
-    this.scheduleMeshAnnounce();
+    this.schedulePeerDiscovery();
     void this.drainPendingRelayEnvelopes();
   }
 
@@ -303,7 +310,7 @@ export class PokerRtcSession {
     ].join('::');
   }
 
-  scheduleMeshAnnounce() {
+  schedulePeerDiscovery() {
     const { playerAddress, lobbyId, tableId } = this.config;
     if (!playerAddress || !lobbyId || !tableId) return;
 
@@ -311,16 +318,90 @@ export class PokerRtcSession {
 
     if (this.announceTimer) clearTimeout(this.announceTimer);
     this.announceTimer = setTimeout(() => {
-      void announcePrivateMesh({
+      const lookingFor = Array.from(this.lookingForPeers)
+        .filter((peerAddress) => !this.connectedLinks.has(linkKey(peerAddress, RTC_LINK.INBOUND)));
+      if (lookingFor.length === 0) return;
+
+      const gossipAnnounced = this.announceGossipRoutes(lookingFor);
+      const meshNow = lookingFor.filter((peerAddress) => (
+        !gossipAnnounced.has(normalizeAddress(peerAddress))
+      ));
+      if (meshNow.length > 0) {
+        this.announceMeshRoutes(meshNow);
+      }
+      this.scheduleMeshFallbackForGossip(lookingFor.filter((peerAddress) => (
+        gossipAnnounced.has(normalizeAddress(peerAddress))
+      )));
+    }, 150);
+  }
+
+  announceGossipRoutes(lookingFor) {
+    const { playerAddress, lobbyId, tableId } = this.config;
+    const announced = new Set();
+    if (!playerAddress || !lobbyId || !tableId) return announced;
+
+    lookingFor.forEach((targetAddress) => {
+      const targetKey = normalizeAddress(targetAddress);
+      const sent = this.sessionPool.sendGossipAnnounce?.({
         originAddress: playerAddress,
+        targetAddress,
         lobbyId,
         tableId,
-        lookingFor: Array.from(this.lookingForPeers),
-        callback: async (inboundMessage, enqueueFn) => {
-          await this.handleSignal(inboundMessage, enqueueFn);
-        },
       });
-    }, 150);
+      if (sent) {
+        announced.add(targetKey);
+        this.logActivity(`gossip announce ${formatPeer(targetAddress)}`);
+      }
+    });
+    return announced;
+  }
+
+  announceMeshRoutes(lookingFor) {
+    const { playerAddress, lobbyId, tableId } = this.config;
+    const unresolved = lookingFor.filter((peerAddress) => (
+      this.lookingForPeers.has(normalizeAddress(peerAddress))
+      && !this.connectedLinks.has(linkKey(peerAddress, RTC_LINK.INBOUND))
+    ));
+    if (!playerAddress || !lobbyId || !tableId || unresolved.length === 0) return;
+
+    this.logActivity(`mesh discovery fallback for ${unresolved.map(formatPeer).join(', ')}`);
+    void announcePrivateMesh({
+      originAddress: playerAddress,
+      lobbyId,
+      tableId,
+      lookingFor: unresolved,
+      callback: async (inboundMessage, enqueueFn) => {
+        await this.handleSignal(inboundMessage, enqueueFn);
+      },
+    });
+  }
+
+  scheduleMeshFallbackForGossip(lookingFor) {
+    lookingFor.forEach((peerAddress) => {
+      const peerKey = normalizeAddress(peerAddress);
+      if (!peerKey) return;
+
+      const existingTimer = this.gossipFallbackTimers.get(peerKey);
+      if (existingTimer) clearTimeout(existingTimer);
+
+      const timer = setTimeout(() => {
+        this.gossipFallbackTimers.delete(peerKey);
+        if (!this.lookingForPeers.has(peerKey)) return;
+        if (this.connectedLinks.has(linkKey(peerAddress, RTC_LINK.INBOUND))) return;
+        this.announceMeshRoutes([peerAddress]);
+      }, GOSSIP_DISCOVERY_FALLBACK_MS);
+      this.gossipFallbackTimers.set(peerKey, timer);
+    });
+  }
+
+  markGossipRouteFound(peerAddress) {
+    const peerKey = normalizeAddress(peerAddress);
+    if (!peerKey) return;
+
+    const timer = this.gossipFallbackTimers.get(peerKey);
+    if (timer) clearTimeout(timer);
+    this.gossipFallbackTimers.delete(peerKey);
+    this.lookingForPeers.delete(peerKey);
   }
 
   getSnapshot() {
@@ -802,7 +883,11 @@ export class PokerRtcSession {
         message,
       });
 
-      if (message?.type === RTC_POOL_SIGNAL) {
+      if (
+        message?.type === RTC_POOL_SIGNAL
+        || message?.type === RTC_POOL_GOSSIP_ANNOUNCE
+        || message?.type === RTC_POOL_GOSSIP_TRIGGER_OFFER
+      ) {
         await this.sessionPool.handleMessage(this, peerAddress, message);
         return;
       }
@@ -977,12 +1062,13 @@ export class PokerRtcSession {
     if (this.connectedLinks.has(key)) return;
 
     this.connectedLinks.add(key);
+    this.lookingForPeers.delete(normalizeAddress(peerAddress));
     this.hasConnectionError = false;
     if (direction === RTC_LINK.INBOUND) {
       this.clearOfferTimeout(peerAddress);
     }
 
-    resolveConnection({
+    resolveConnection?.({
       type: 'link-connected',
       from: this.config.playerAddress,
       to: peerAddress,
@@ -1206,12 +1292,34 @@ export class PokerRtcSession {
     this.emitActivity(`${formatSeat(recipientAddress)} << ${signal.type === 'accept' ? 'Accept' : 'Offer'} ${formatKey(encryptedSignal.encryptionPublicKey)}`);
   }
 
-  async triggerOfferForPeer(peerAddress, enqueue = null) {
+  async sendPooledEncryptedSignal(recipientAddress, recipientPubKey, signal) {
+    const { playerAddress, lobbyId, tableId } = this.config;
+    const encryptedSignal = await this.encryptSignalForPeer(recipientPubKey, signal);
+    if (!encryptedSignal) return false;
+
+    const delivered = await this.sessionPool.sendEncryptedSignal({
+      originAddress: playerAddress,
+      targetAddress: recipientAddress,
+      lobbyId,
+      tableId,
+      encryptedData: encryptedSignal.encryptedData,
+    });
+
+    if (delivered) {
+      this.logActivity(`gossip ${signal.type} delivered ${formatPeer(recipientAddress)}`);
+      this.emitActivity(`${formatSeat(recipientAddress)} <~ ${signal.type === 'accept' ? 'Accept' : 'Offer'} ${formatKey(encryptedSignal.encryptionPublicKey)}`);
+    } else {
+      this.logActivity(`gossip ${signal.type} undelivered ${formatPeer(recipientAddress)}`);
+    }
+    return delivered;
+  }
+
+  async triggerOfferForPeer(peerAddress, enqueue = null, { transport = 'mesh' } = {}) {
     const peerKey = normalizeAddress(peerAddress);
     const subscription = this.getSubscription(peerAddress, RTC_LINK.INBOUND);
     const pubKey = subscription?.publicAnnounceKey ?? this.getPlayerPublicKey(peerAddress);
 
-    this.logActivity(`triggerOfferForPeer for ${formatPeer(peerKey)} (pubKey found: ${Boolean(pubKey)})`);
+    this.logActivity(`triggerOfferForPeer for ${formatPeer(peerKey)} (transport=${transport}, pubKey found: ${Boolean(pubKey)})`);
 
     if (!pubKey) {
       this.logActivity(`triggerOfferForPeer aborted: missing announce public key for ${formatPeer(peerKey)}`);
@@ -1221,11 +1329,11 @@ export class PokerRtcSession {
     await this.executeSendOffer({
       playerAddress: peerAddress,
       annoncePublicKey: pubKey,
-    }, enqueue);
+    }, { enqueue, transport });
   }
 
-  async executeSendOffer(peer, enqueue = null) {
-    const { playerAddress, operatorPrivateKey, publicKey, tableId, lobbyId } = this.config;
+  async executeSendOffer(peer, { enqueue = null, transport = 'mesh' } = {}) {
+    const { playerAddress, publicKey, tableId, lobbyId } = this.config;
     const peerPubKey = peer?.annoncePublicKey ?? peer?.announcePublicKey;
 
     if (!playerAddress || !publicKey || !tableId || !lobbyId || !peer?.playerAddress || !peerPubKey) {
@@ -1240,7 +1348,20 @@ export class PokerRtcSession {
         return;
       }
 
-      this.logActivity(`executeSendOffer creating SDP offer for ${formatPeer(peer.playerAddress)}`);
+      const existing = this.getSubscription(peer.playerAddress, RTC_LINK.INBOUND);
+      if (
+        existing?.state === SUBSCRIPTION_STATE.OFFER_SENT
+        && existing.peerConnection
+        && !isDeadPeerConnection(existing.peerConnection)
+      ) {
+        this.logActivity(`executeSendOffer skipped ${formatPeer(peer.playerAddress)}: offer already in flight`);
+        return;
+      }
+      if (!existing) {
+        this.createSubscription(peer.playerAddress, peerPubKey, RTC_LINK.INBOUND);
+      }
+
+      this.logActivity(`executeSendOffer creating SDP offer for ${formatPeer(peer.playerAddress)} via ${transport}`);
       const pc = this.createPeerConnection(peer.playerAddress, RTC_LINK.INBOUND, true);
 
       const offer = await pc.createOffer();
@@ -1253,7 +1374,15 @@ export class PokerRtcSession {
         sdp: pc.localDescription.sdp,
       };
 
-      await this.sendEncryptedSignal(peer.playerAddress, peerPubKey, signal, enqueue);
+      if (transport === 'gossip') {
+        const delivered = await this.sendPooledEncryptedSignal(peer.playerAddress, peerPubKey, signal);
+        if (!delivered) {
+          this.setSubscriptionState(peer.playerAddress, RTC_LINK.INBOUND, SUBSCRIPTION_STATE.CREATED);
+          return;
+        }
+      } else {
+        await this.sendEncryptedSignal(peer.playerAddress, peerPubKey, signal, enqueue);
+      }
       this.setSubscriptionState(peer.playerAddress, RTC_LINK.INBOUND, SUBSCRIPTION_STATE.OFFER_SENT);
       this.startOfferTimeout(peer.playerAddress);
       this.emitState();
@@ -1269,7 +1398,7 @@ export class PokerRtcSession {
     if (!peerKey) return;
 
     this.lookingForPeers.add(peerKey);
-    this.scheduleMeshAnnounce();
+    this.schedulePeerDiscovery();
   }
 
   async subscribeTo(peerPlayerAddress, peerAnnouncePubKey, callback) {
@@ -1286,7 +1415,7 @@ export class PokerRtcSession {
       playerAddress: peerPlayerAddress,
     });
     this.emitState();
-    this.scheduleMeshAnnounce();
+    this.schedulePeerDiscovery();
   }
 
   async pokeInboundConnection(peerPlayerAddress, peerAnnouncePubKey, callback) {
@@ -1312,8 +1441,8 @@ export class PokerRtcSession {
     this.lookingForPeers.add(peerKey);
     this.resetPeerLink(peerPlayerAddress, RTC_LINK.INBOUND, 'poke');
 
-    this.logActivity(`Poke action: re-announcing intent to mesh for ${formatPeer(peerKey)}`);
-    this.scheduleMeshAnnounce();
+    this.logActivity(`Poke action: re-announcing peer discovery for ${formatPeer(peerKey)}`);
+    this.schedulePeerDiscovery();
   }
 
   async sendAccept(peerAddress, peerPubKey, offerSdp, direction = RTC_LINK.OUTBOUND, { viaDataChannel = false, viaPool = false, enqueue = null } = {}) {
@@ -1348,6 +1477,12 @@ export class PokerRtcSession {
         this.emitMediaDataChannelRequired(peerAddress);
         return;
       }
+    } else if (viaPool) {
+      const delivered = await this.sendPooledEncryptedSignal(peerAddress, publicAnnounceKey, signal);
+      if (!delivered) {
+        this.logActivity(`gossip accept undelivered ${formatPeer(peerAddress)}`);
+        return;
+      }
     } else {
       await this.sendEncryptedSignal(peerAddress, publicAnnounceKey, signal, enqueue);
     }
@@ -1358,8 +1493,9 @@ export class PokerRtcSession {
   async handleIncomingSignal(senderAddress, signal, { viaDataChannel = false, viaPool = false, receivedDirection = null, enqueue = null } = {}) {
     if (signal?.type === 'trigger-offer') {
       const target = normalizeAddress(signal.target);
-      this.logActivity(`received trigger-offer for target ${formatPeer(target)}`);
-      await this.triggerOfferForPeer(target, enqueue);
+      const transport = signal.transport === 'gossip' ? 'gossip' : 'mesh';
+      this.logActivity(`received trigger-offer for target ${formatPeer(target)} via ${transport}`);
+      await this.triggerOfferForPeer(target, enqueue, { transport });
       return;
     }
 
@@ -1370,7 +1506,7 @@ export class PokerRtcSession {
 
       if (status === 'connect_through_peers') {
         this.emitActivity(`${formatSeat(target)} :: Reachable via P2P Gossip`);
-        await this.triggerOfferForPeer(target);
+        await this.triggerOfferForPeer(target, null, { transport: 'gossip' });
 
       } else if (status === 'cut') {
         this.emitActivity(`${formatSeat(target)} !! P2P Route Cut`);
@@ -1454,6 +1590,36 @@ export class PokerRtcSession {
     }
   }
 
+  async handleGossipAnnounce(message) {
+    const { playerAddress, lobbyId, tableId } = this.config;
+    const origin = normalizeAddress(message?.originAddress);
+    const target = normalizeAddress(message?.targetAddress);
+    const me = normalizeAddress(playerAddress);
+    if (!origin || !target || target !== me || origin === me) return;
+    if (String(message.lobbyId) !== String(lobbyId) || String(message.tableId) !== String(tableId)) return;
+
+    this.logActivity(`gossip announce reached me from ${formatPeer(origin)}`);
+    this.sessionPool.sendGossipTriggerOffer?.({
+      originAddress: playerAddress,
+      targetAddress: origin,
+      triggerTargetAddress: playerAddress,
+      lobbyId,
+      tableId,
+    });
+  }
+
+  async handleGossipTriggerOffer(message) {
+    const { playerAddress, lobbyId, tableId } = this.config;
+    const target = normalizeAddress(message?.targetAddress);
+    const triggerTarget = normalizeAddress(message?.triggerTargetAddress ?? message?.originAddress);
+    if (target !== normalizeAddress(playerAddress) || !triggerTarget) return;
+    if (String(message.lobbyId) !== String(lobbyId) || String(message.tableId) !== String(tableId)) return;
+
+    this.markGossipRouteFound(triggerTarget);
+    this.emitActivity(`${formatSeat(triggerTarget)} :: Reachable via P2P Gossip`);
+    await this.triggerOfferForPeer(triggerTarget, null, { transport: 'gossip' });
+  }
+
   async handleRelayEncryptedSignal(envelope) {
     return this.enqueueControlAction(
       'RTC pooled signal',
@@ -1515,6 +1681,7 @@ export class PokerRtcSession {
 
   resetForTable() {
     if (this.announceTimer) clearTimeout(this.announceTimer);
+    this.gossipFallbackTimers.forEach((timer) => clearTimeout(timer));
     this.sessionPool.unregisterSession(this);
     this.inboundSubscriptions.forEach((subscription) => {
       if (subscription.webRtcChannel) {
@@ -1571,6 +1738,7 @@ export class PokerRtcSession {
     this.publishedMessages.clear();
     this.seenDisagreements.clear();
     this.lookingForPeers.clear();
+    this.gossipFallbackTimers.clear();
     this.localMediaStream = null;
     this.remoteMediaStreams.clear();
     this.mediaSnapshotVersion += 1;
