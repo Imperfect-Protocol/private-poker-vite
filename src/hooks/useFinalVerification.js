@@ -753,9 +753,16 @@ export function buildNextFinalVerification({
     tableId,
     handId,
   });
-  const verified = aggregateSignatureShares({
+  const nextPublicKeyShares = collectPublicKeyShares({
     tableSeats,
     publicKeyShares,
+    signatureShares,
+    currentSeatNo,
+    publicKey,
+  });
+  const verified = aggregateSignatureShares({
+    tableSeats,
+    publicKeyShares: nextPublicKeyShares,
     signatureShares,
     signaturePayload: digestPayload.signaturePayload,
   });
@@ -766,7 +773,7 @@ export function buildNextFinalVerification({
     return {
       ...digestPayload,
       ...verified,
-      publicKeyShares,
+      publicKeyShares: nextPublicKeyShares,
       nextSeat,
       complete: true,
       signed: false,
@@ -776,7 +783,7 @@ export function buildNextFinalVerification({
     return {
       ...digestPayload,
       ...verified,
-      publicKeyShares,
+      publicKeyShares: nextPublicKeyShares,
       nextSeat,
       complete: false,
       signed: false,
@@ -784,7 +791,7 @@ export function buildNextFinalVerification({
   }
 
   const finalPublicKey = publicKey ?? decodePublicKey(
-    tablePublicKeyForSeat(tableSeats, publicKeyShares, currentSeatNo),
+    tablePublicKeyForSeat(tableSeats, nextPublicKeyShares, currentSeatNo),
   );
   const signature = blsSignDigest(digestPayload.signaturePayload, signingKey);
   const nextSignatureShares = [
@@ -798,7 +805,7 @@ export function buildNextFinalVerification({
   ];
   const nextVerified = aggregateSignatureShares({
     tableSeats,
-    publicKeyShares,
+    publicKeyShares: nextPublicKeyShares,
     signatureShares: nextSignatureShares,
     signaturePayload: digestPayload.signaturePayload,
   });
@@ -806,7 +813,7 @@ export function buildNextFinalVerification({
   return {
     ...digestPayload,
     ...nextVerified,
-    publicKeyShares,
+    publicKeyShares: nextPublicKeyShares,
     nextSeat: nextVerified.signatureShares.length,
     complete: nextVerified.signatureShares.length === numPlayers,
     signed: true,

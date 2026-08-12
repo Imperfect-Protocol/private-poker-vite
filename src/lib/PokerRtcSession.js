@@ -301,6 +301,7 @@ export class PokerRtcSession {
       normalizeAddress(config.playerAddress),
       config.tableId ?? '',
       config.lobbyId ?? '',
+      config.currentHand ?? '',
       config.publicKey ?? '',
       config.privateKey ? 'private-key-ready' : '',
       config.playerAddress ?? '',
@@ -1002,14 +1003,19 @@ export class PokerRtcSession {
       if (!player?.playerAddress || !pubKey) return;
 
       const isMe = normalizeAddress(player.playerAddress) === normalizeAddress(playerAddress);
-      const key = `join:${tableId}:${normalizeAddress(player.playerAddress)}:${pubKey}`;
+      const activity = Number(this.config.currentHand ?? 0) > 0 ? 'Re-Joined' : 'Join';
+      const key = `join:${activity}:${tableId}:${normalizeAddress(player.playerAddress)}:${pubKey}`;
       if (this.joinLog.has(key)) return;
       this.joinLog.add(key);
 
       if (isMe) {
-        this.emitActivity(`[Me] :: Join ${formatKey(pubKey)}`);
+        this.emitActivity(activity === 'Re-Joined'
+          ? '[Me] :: Re-Joined'
+          : `[Me] :: Join ${formatKey(pubKey)}`);
       } else {
-        this.emitActivity(`${formatSeat(player.playerAddress)} :: Join ${formatKey(pubKey)}`);
+        this.emitActivity(activity === 'Re-Joined'
+          ? `${formatSeat(player.playerAddress)} :: Re-Joined`
+          : `${formatSeat(player.playerAddress)} :: Join ${formatKey(pubKey)}`);
       }
     });
   }

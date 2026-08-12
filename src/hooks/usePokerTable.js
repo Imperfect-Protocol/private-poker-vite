@@ -2136,14 +2136,6 @@ export function usePokerTable({
             publicKey: wire.action.public_key,
             traces: wire.action.traces,
           });
-          if (game.clientState.current_hand()?.get_current_state?.().is_finished?.()) {
-            transitionTableProtocol(game, TableProtocolState.settleHand({
-              handId: game.clientState.hand_id,
-            }));
-            if (tokenRing.targetsCurrentSeat(tokenMessage ?? entry?.wire ?? wire)) {
-              await submitFinalVerificationRound(game);
-            }
-          }
         }
         const displayLines = wire.log_lines?.length > 0
           ? wire.log_lines
@@ -2170,6 +2162,14 @@ export function usePokerTable({
 
     if (latestAppliedAction) {
       appendTraceLines(latestAppliedAction.displayLines, latestAppliedAction.from);
+    }
+    if (game.clientState.current_hand()?.get_current_state?.().is_finished?.()) {
+      transitionTableProtocol(game, TableProtocolState.settleHand({
+        handId: game.clientState.hand_id,
+      }));
+      if (tokenRing.targetsCurrentSeat(tokenMessage)) {
+        await submitFinalVerificationRound(game);
+      }
     }
     updateView({ force: true });
     return true;

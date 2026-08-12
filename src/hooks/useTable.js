@@ -24,6 +24,7 @@ const buildSeats = (tableData) => {
       playerAddress: player?.playerAddress ?? null,
       operator: player?.operator ?? null,
       announcePublicKey: player?.annoncePublicKey ?? null,
+      signaturePublicKey: player?.annoncePublicKey ?? null,
     };
   });
 };
@@ -36,6 +37,7 @@ const makeSeatsKey = (seats) => seats
     normalizeAddress(seat.playerAddress),
     normalizeAddress(seat.operator),
     seat.announcePublicKey ?? '',
+    seat.signaturePublicKey ?? '',
   ].join('/'))
   .join('|');
 

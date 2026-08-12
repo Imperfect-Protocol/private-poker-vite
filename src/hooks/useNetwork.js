@@ -131,6 +131,7 @@ export function useNetwork({
       operator: keys.operator,
       tableId,
       lobbyId,
+      currentHand: tableDetails?.currentHand,
       publicKey: keys.publicKey,
       privateKey: keys.privateKey,
       operatorPrivateKey: keys.operatorPrivateKey,
@@ -189,6 +190,7 @@ export function useNetwork({
       operator,
       tableId,
       lobbyId,
+      currentHand: tableDetails?.currentHand,
       publicKey,
       privateKey,
       operatorPrivateKey,
@@ -215,6 +217,7 @@ export function useNetwork({
     sendSignal,
     session,
     tableCapacity,
+    tableDetails?.currentHand,
     tableId,
   ]);
 
