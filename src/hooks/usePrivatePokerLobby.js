@@ -52,6 +52,7 @@ export function usePrivatePokerLobby({ onOperatorTopUp } = {}) {
         let hash;
         try {
             if (operatorPrivateKey) {
+                console.info(`writeContract [from Operator] ${LOBBY_CONTRACT_ADDRESS} ${functionName}:`, args);
                 hash = await writeContractFromOperator({
                     operatorPrivateKey,
                     contract: LOBBY_CONTRACT_ADDRESS,
@@ -60,6 +61,7 @@ export function usePrivatePokerLobby({ onOperatorTopUp } = {}) {
                     args,
                 });
             } else {
+                console.info(`writeContract [from Wallet] ${LOBBY_CONTRACT_ADDRESS} ${functionName}:`, args);
                 const overrides = await getWriteOverrides({ functionName, args });
 
                 hash = await mutateAsync({
@@ -298,7 +300,14 @@ export function usePrivatePokerLobby({ onOperatorTopUp } = {}) {
         });
     };
 
-    const joinTable = async (lobbyId, tableId, buyIn, playerAddress, operator, publicKeyBytes = '0x', operatorPrivateKey = undefined) => {
+    const joinTable = async (
+        lobbyId,
+        tableId,
+        playerAddress,
+        operator,
+        publicKeyBytes = '0x',
+        operatorPrivateKey = undefined
+    ) => {
         return await writeLobbyContract({
             functionName: 'joinTable',
             args: [BigInt(lobbyId), BigInt(tableId), playerAddress, operator, publicKeyBytes],

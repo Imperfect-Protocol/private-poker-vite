@@ -10,6 +10,24 @@ export const STAKES_OPTIONS = [
 
 export function getBlindsForBuyin(buyinAmount) {
     const numBuyin = Number(buyinAmount);
+    if (!Number.isFinite(numBuyin) || numBuyin <= 0) return null;
+
     const option = STAKES_OPTIONS.find(opt => opt.buyin === numBuyin);
-    return option ? option.blinds : "Unknown"; // Fallback just in case
+    const smallBlind = numBuyin / 100;
+    const bigBlind = numBuyin / 50;
+
+    return {
+        smallBlind,
+        bigBlind,
+        label: option ? option.blinds : `${smallBlind}/${bigBlind}`,
+        toString() {
+            return this.label;
+        },
+    };
+}
+
+export function getStakesLabel(buyinAmount) {
+    const numBuyin = Number(buyinAmount);
+    const option = STAKES_OPTIONS.find(opt => opt.buyin === numBuyin);
+    return option ? option.label : `Stakes: $${buyinAmount}`;
 }

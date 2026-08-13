@@ -12,12 +12,9 @@ import {
   verify as blsVerify,
 } from '@/lib/crum_bls';
 import {
-  HAND_ID,
-  INITIAL_CHIPS,
   PokerAction,
   PokerActionEnvelopeWire,
   PokerClientState,
-  SMALL_BLIND,
   poker_action_wire_to_submit,
 } from '@/lib/crum_net';
 import {
@@ -30,6 +27,7 @@ import {
   communityCardConsoleLines,
 } from '@/lib/crum_pkr';
 import { holdemShowdown } from '@/lib/crum_pkr/hand_evaluator';
+import { useCountdown } from '@/hooks/useCountdown';
 import { buildFinalHandSettlement, useFinalVerification } from '@/hooks/useFinalVerification';
 import { VirtualTokenRing } from '@/hooks/useTokenRing.js';
 import { formatChainError } from '@/lib/chain/errors.js';
@@ -43,6 +41,8 @@ import {
   TableProtocolState,
   tableProtocolStateType,
 } from '@/lib/table_protocol_state.js';
+import { getBlindsForBuyin } from '@/lib/stakes';
+import { fromChipUnits } from '@/lib/constants';
 
 const HISTORY_MESSAGE = 'History';
 const CHAT_MESSAGE = 'ChatMessage';
@@ -52,6 +52,7 @@ const TABLE_AGGREGATE_PUBLIC_KEY_MESSAGE = 'TableAggregatePublicKey';
 const ACTION_SIGNATURE_SCHEME = 'BLS12-381-G2-PK-G1-SIG';
 const BETTING_UI_STATES = new Set(['PreFlop', 'Flop', 'Turn', 'River']);
 const BAD_UNMASK_G1 = G1.BASE.toRawBytes(true);
+const HAND_ID = 1;
 const textEncoder = new TextEncoder();
 
 function shallowEqual(left, right) {
@@ -356,12 +357,27 @@ function handHistoryTipKey({ tableId, handId, historyEntries = [] } = {}) {
   ].join(':');
 }
 
-function makePokerTable(numPlayers) {
+function makePokerTable(numPlayers, buyIn, smallBlind) {
+  const numericBuyIn = Number(buyIn);
+  const numericSmallBlind = Number(smallBlind);
+
+  if (
+    !numPlayers ||
+    !Number.isSafeInteger(numericBuyIn) ||
+    numericBuyIn < 0 ||
+    !Number.isSafeInteger(numericSmallBlind) ||
+    numericSmallBlind < 0
+  ) {
+    return null;
+  }
+
   const table = PokerTable.new(numPlayers, POKER_HOLDEM_ROUNDS);
   for (let player = 1; player <= numPlayers; player += 1) {
     table.join(player);
   }
-  table.start_hand(Array(numPlayers).fill(INITIAL_CHIPS), SMALL_BLIND, 0);
+
+  // Strictly pass numeric primitive integers
+  table.start_hand(Array(numPlayers).fill(numericBuyIn), numericSmallBlind, 0);
   return table;
 }
 
@@ -433,15 +449,16 @@ function nextDealerSeatNumber(pokerTable) {
   return ((pokerTable.dealer_button ?? 0) + 1) % maxPlayers;
 }
 
-function chipStackSize(chips) {
-  if (chips <= INITIAL_CHIPS * 0.5) return 'Small';
-  if (chips <= INITIAL_CHIPS) return 'Medium';
-  if (chips <= INITIAL_CHIPS * 1.5) return 'Big';
+function chipStackSize(chips, buyIn) {
+  if (!buyIn) return 'Medium';
+  if (chips <= buyIn * 0.5) return 'Small';
+  if (chips <= buyIn) return 'Medium';
+  if (chips <= buyIn * 1.5) return 'Big';
   return 'ExtraLarge';
 }
 
-function chipStackSizes(stacks) {
-  return stacks.map(chipStackSize);
+function chipStackSizes(stacks, buyIn) {
+  return stacks.map((chips) => chipStackSize(chips, buyIn));
 }
 
 function tableViewPatch(clientState, signingKey, viewerSeatNo = null) {
@@ -619,6 +636,7 @@ function settleHandState(game, fallbackHandId = null) {
 
 function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null, tableSeats = []) {
   const hand = game?.clientState.current_hand();
+  const tableBuyIn = game?.currentHandSetup?.initial_chips?.[0] ?? tableSeats[0]?.chips;
   const viewerPlayerIndex = viewerSeatNo ?? game?.clientState.player_index ?? 0;
   if (!game || !hand) {
     return {
@@ -659,7 +677,7 @@ function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null, tab
       maxBet: safeChipsRemaining(hand, viewerPlayerIndex),
       step: hand.get_small_blind(),
       chipStacks: stacks,
-      chipStackSizes: chipStackSizes(stacks),
+      chipStackSizes: chipStackSizes(stacks, tableBuyIn),
       hands: hand.get_player_cards().map(() => ({ cards: [], rank: null, isWinner: false })),
       winner: null,
       resultText: cheatReport.player === viewerPlayerIndex ? 'Cheater' : 'Game Cheated',
@@ -694,18 +712,23 @@ function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null, tab
     const payoutAmount = Number(hand.betting_state?.pot?.toString?.() ?? 0);
     const settlement = finalSettlementComplete ? game.finalHandSettlement : null;
     const settlementWinner = settlementWinnerIndex(settlement, tableSeats);
+
     const settlementPayout = settlementWinner == null
       ? 0
-      : Number(settlement?.pot_size_per_player?.[settlementWinner] ?? 0);
+      : Number(fromChipUnits(settlement?.pot_size_per_player?.[settlementWinner] ?? 0));
+
     const hands = playerCards.map((cards, index) => ({
       cards,
       rank: null,
       isWinner: finalSettlementComplete && settlementWinner === index,
     }));
+
     const playerWon = settlementWinner != null && settlementWinner === viewerPlayerIndex;
+
     const stacks = finalSettlementComplete
-      ? settlement?.chips_balances ?? chipStacks(hand)
+      ? (settlement?.chips_balances ?? []).map((chips) => Number(fromChipUnits(chips)))
       : chipStacks(hand);
+
     const revealedWinner = finalSettlementComplete ? settlementWinner : null;
 
     return {
@@ -721,7 +744,7 @@ function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null, tab
       maxBet: safeChipsRemaining(hand, viewerPlayerIndex),
       step: hand.get_small_blind(),
       chipStacks: stacks,
-      chipStackSizes: chipStackSizes(stacks),
+      chipStackSizes: chipStackSizes(stacks, tableBuyIn),
       hands,
       winner: revealedWinner,
       resultText: revealedWinner == null ? null : playerWon ? 'You Win' : 'You Lose',
@@ -754,7 +777,7 @@ function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null, tab
     maxBet: safeChipsRemaining(hand, viewerPlayerIndex),
     step: hand.get_small_blind(),
     chipStacks: chipStacks(hand),
-    chipStackSizes: chipStackSizes(chipStacks(hand)),
+    chipStackSizes: chipStackSizes(chipStacks(hand), tableBuyIn),
     payout: null,
     activePlayers,
     allInPlayers,
@@ -857,24 +880,39 @@ function actionSnapshotFromState({
   const waitingForSmallBlind = stateName === 'SmallBlind' && isMyTurn && !isAllIn;
   const waitingForBigBlind = stateName === 'BigBlind' && isMyTurn && !isAllIn;
   const waitingForBlind = waitingForSmallBlind || waitingForBigBlind;
-  const availableChips = Number(currentGameState?.maxBet ?? viewPatch?.max_bet ?? INITIAL_CHIPS);
+
+  // Derive small & big blinds strictly from passed-in state/view patch
+  const smallBlind = viewPatch?.small_blind ?? currentGameState?.step;
+  const bigBlind = viewPatch?.big_blind ?? (smallBlind !== undefined ? smallBlind * 2 : undefined);
+
+  // Available chips (strictly from on-chain state, undefined if uninitialized)
+  const availableChips = currentGameState?.maxBet ?? viewPatch?.max_bet;
+
+  // Compute required blind amount
   const requiredBlindAmount = waitingForSmallBlind
-    ? Number(viewPatch?.small_blind ?? SMALL_BLIND)
+    ? smallBlind
     : waitingForBigBlind
-      ? Number(viewPatch?.big_blind ?? SMALL_BLIND * 2)
-      : Number(currentGameState?.minBet ?? viewPatch?.min_bet ?? SMALL_BLIND);
-  const blindAmount = waitingForBlind
-    ? Math.max(0, Math.min(requiredBlindAmount, availableChips))
+      ? bigBlind
+      : Number(currentGameState?.minBet ?? viewPatch?.min_bet);
+
+  // Clamp blind to available chips
+  const blindAmount = waitingForBlind && requiredBlindAmount !== undefined && availableChips !== undefined
+    ? Math.max(0, Math.min(requiredBlindAmount, Number(availableChips)))
     : requiredBlindAmount;
+
+  // Single declaration of actionMinBet
   const actionMinBet = waitingForBlind
     ? blindAmount
-    : Number(currentGameState?.minBet ?? viewPatch?.min_bet ?? SMALL_BLIND);
+    : Number(currentGameState?.minBet ?? viewPatch?.min_bet ?? smallBlind);
+
   const onlyCallMode = waitingForBet
     && bettingPlayers.length === 1
     && activePlayers[playerIndex] === true
     && allInPlayers[playerIndex] !== true
     && activeAllInCount > 0;
   const onlyCheckMode = onlyCallMode && actionMinBet === 0;
+
+  const step = Number(currentGameState?.step ?? viewPatch?.bet_step ?? smallBlind);
 
   return {
     ...previousSnapshot,
@@ -883,10 +921,10 @@ function actionSnapshotFromState({
     waitingForBet,
     waitingForBlind,
     canAct: isMyTurn && !isFolded && !isAllIn,
-    stateLabel: viewPatch?.state_label ?? previousSnapshot.stateLabel,
+    stateLabel: viewPatch?.state_label ?? previousSnapshot?.stateLabel,
     minBet: actionMinBet,
-    maxBet: availableChips,
-    step: Number(currentGameState?.step ?? viewPatch?.bet_step ?? SMALL_BLIND),
+    maxBet: availableChips !== undefined ? Number(availableChips) : undefined,
+    step,
     actionAmount: waitingForBlind ? blindAmount : actionMinBet,
     primaryLabel: waitingForSmallBlind
       ? 'Small Blind'
@@ -952,10 +990,10 @@ export function usePokerTable({
     waitingForBlind: false,
     canAct: false,
     stateLabel: 'Waiting',
-    minBet: SMALL_BLIND,
-    maxBet: 100,
-    step: SMALL_BLIND,
-    actionAmount: SMALL_BLIND,
+    minBet: undefined,
+    maxBet: undefined,
+    step: undefined,
+    actionAmount: undefined,
     primaryLabel: 'Raise',
     sliderDisabled: false,
     hideCall: false,
@@ -975,6 +1013,7 @@ export function usePokerTable({
     protocolActionState: null,
     viewPatch: {},
   });
+  const { countdown, startCountdown } = useCountdown();
   const [gameMessages, setGameMessages] = useState([]);
   const [cheatReport, setCheatReport] = useState(null);
   const [terminalResult, setTerminalResult] = useState(null);
@@ -1055,7 +1094,13 @@ export function usePokerTable({
 
   const resetGame = useCallback(() => {
     const numPlayers = Number(tableMaxSeats || 0);
-    if (!numPlayers || tableId == null) return null;
+    const buyIn = table?.tableData?.buyin;
+    const smallBlind = table?.tableData?.blinds?.smallBlind ?? getBlindsForBuyin(buyIn)?.smallBlind;
+
+    // STRICT: If on-chain details aren't loaded yet, do not instantiate with fake defaults
+    if (!numPlayers || tableId == null || buyIn === undefined || smallBlind === undefined) {
+      return null;
+    }
 
     const chainCurrentHand = Number.isFinite(tableCurrentHandRef.current)
       ? tableCurrentHandRef.current
@@ -1074,7 +1119,10 @@ export function usePokerTable({
           handSetup: previousGame?.currentHandSetup ?? null,
         })
         : TableProtocolState.startHand({ handId: chainCurrentHand + 1 });
-    const pokerTable = makePokerTable(numPlayers);
+
+    const pokerTable = makePokerTable(numPlayers, buyIn, smallBlind);
+    if (!pokerTable) return null;
+
     pokerTable.hand_number = chainCurrentHand;
     const clientState = PokerClientState.new(
       currentSeatNo ?? 0,
@@ -1107,8 +1155,8 @@ export function usePokerTable({
       currentHandSetup: {
         hand_id: chainCurrentHand,
         hand_number: chainCurrentHand,
-        initial_chips: Array(numPlayers).fill(INITIAL_CHIPS),
-        small_blind: SMALL_BLIND,
+        initial_chips: Array(numPlayers).fill(buyIn),
+        small_blind: smallBlind,
         dealer_button: 0,
       },
       shuffleTrace: null,
@@ -1288,15 +1336,23 @@ export function usePokerTable({
   const markOnChainHandStarted = useCallback((game, handId) => {
     const targetHandId = Number(handId);
     if (!game || !targetHandId) return;
+
+    const buyIn = table?.tableData?.buyin;
+    const smallBlind = table?.tableData?.blinds?.smallBlind ?? getBlindsForBuyin(buyIn)?.smallBlind;
+
+    if (buyIn === undefined || smallBlind === undefined) return;
+
     const currentHand = game.clientState.current_hand?.();
     const currentHandId = Number(game.clientState.hand_id ?? 0);
     const needsLocalNextHand = currentHand?.get_current_state?.().is_finished?.()
       && targetHandId >= currentHandId;
+
     if (needsLocalNextHand) {
       const nextStacks = finalHandStacks(currentHand);
       const initialChips = nextStacks.length > 0
         ? nextStacks
-        : Array(game.clientState.table.get_current_player_count()).fill(INITIAL_CHIPS);
+        : Array(game.clientState.table.get_current_player_count()).fill(buyIn);
+
       const smallBlind = currentHand.get_small_blind();
       const dealerSeatNumber = nextDealerSeatNumber(game.clientState.table);
       game.clientState.table.start_hand(initialChips, smallBlind, dealerSeatNumber);
@@ -1317,8 +1373,8 @@ export function usePokerTable({
     game.currentHandSetup ??= {
       hand_id: targetHandId,
       hand_number: targetHandId,
-      initial_chips: Array(requiredStartHandSeats()).fill(INITIAL_CHIPS),
-      small_blind: SMALL_BLIND,
+      initial_chips: Array(requiredStartHandSeats()).fill(buyIn),
+      small_blind: smallBlind,
       dealer_button: 0,
     };
     game.currentHandSetup.hand_id = targetHandId;
@@ -1900,20 +1956,50 @@ export function usePokerTable({
         appendGameLog(`Final hand settlement submitted on-chain: ${hash}`);
         const nextStacks = finalHandStacks(hand);
         const playersWithChips = nextStacks.filter((chips) => Number(chips) > 0).length;
-        if (playersWithChips <= 1) {
-          transitionTableProtocol(game, TableProtocolState.tableComplete({
-            handId,
-            settlement: finalVerification.settlementMessage,
-            tx: hash,
-          }));
-        } else {
-          const nextHandId = Number(handId) + 1;
-          transitionTableProtocol(game, TableProtocolState.startHand({
-            handId: nextHandId,
-            confirmations: [],
-          }));
-          publishStartHandMessage(game, null, nextHandId);
-        }
+        const isLastHand = playersWithChips <= 1;
+
+        // if (isLastHand) {
+        //   transitionTableProtocol(game, TableProtocolState.tableComplete({
+        //     handId,
+        //     settlement: finalVerification.settlementMessage,
+        //     tx: hash,
+        //   }));
+
+        // } else {
+        //   const nextHandId = Number(handId) + 1;
+        //   transitionTableProtocol(game, TableProtocolState.startHand({
+        //     handId: nextHandId,
+        //     confirmations: [],
+        //   }));
+        //   publishStartHandMessage(game, null, nextHandId);
+        // }
+        startCountdown(5, () => {
+          if (isLastHand) {
+            transitionTableProtocol(game, TableProtocolState.tableComplete({
+              handId,
+              settlement: finalVerification.settlementMessage,
+              tx: hash,
+            }));
+            const winnerIndex = settlementWinnerIndex(finalVerification.settlementMessage, tableSeats);
+            const playerIndex = game.clientState.player_index;
+            const isViewerWinner = winnerIndex === playerIndex;
+            const viewerChips = Number(fromChipUnits(
+              finalVerification.settlementMessage?.chips_balances?.[playerIndex] ?? 0
+            ));
+            setTerminalResult({
+              type: isViewerWinner ? 'win' : 'loss',
+              chips: viewerChips,
+            });
+          } else {
+            const nextHandId = Number(handId) + 1;
+            transitionTableProtocol(game, TableProtocolState.startHand({
+              handId: nextHandId,
+              confirmations: [],
+            }));
+            publishStartHandMessage(game, null, nextHandId);
+          }
+          updateView({ force: true });
+        });
         transitionTableProtocol(game, {
           ...game.tableProtocolState,
           tx: hash,
@@ -2047,10 +2133,11 @@ export function usePokerTable({
     updateView,
   ]);
 
-  useEffect(() => {
-    if (snapshot.currentGameState?.tableProtocolState !== TABLE_PROTOCOL_STATE_SETTLE_HAND) return;
-    submitFinalVerificationRound(gameRef.current);
-  }, [snapshot.currentGameState?.tableProtocolState, submitFinalVerificationRound]);
+  // TODO: Do we need this?
+  // useEffect(() => {
+  //   if (snapshot.currentGameState?.tableProtocolState !== TABLE_PROTOCOL_STATE_SETTLE_HAND) return;
+  //   submitFinalVerificationRound(gameRef.current);
+  // }, [snapshot.currentGameState?.tableProtocolState, submitFinalVerificationRound]);
 
   const startNextHand = useCallback(() => {
     const game = gameRef.current;
@@ -2525,6 +2612,62 @@ export function usePokerTable({
     });
   }, [ensureKeys, tokenRingSnapshot?.status, table?.currentSeat?.seatNo, updateView]);
 
+  // useEffect(() => {
+  //   const connected = tokenRingSnapshot?.inboundState === 'Connected'
+  //     && tokenRingSnapshot?.outboundState === 'Connected';
+  //   const wasConnected = previousConnectedRef.current;
+  //   previousConnectedRef.current = connected;
+
+  //   if (!connected) {
+  //     if (wasConnected) pendingHistorySyncRef.current = true;
+  //     return;
+  //   }
+
+  //   if (
+  //     wasConnected
+  //     && protocolType(gameRef.current) !== TABLE_PROTOCOL_STATE_TABLE_AGGREGATE_PUBLIC_KEY
+  //   ) return;
+
+  //   ensureKeys().then(async (game) => {
+  //     if (!game) return;
+  //     if (
+  //       protocolType(game) === TABLE_PROTOCOL_STATE_TABLE_AGGREGATE_PUBLIC_KEY
+  //       && currentSeatNo !== 0
+  //     ) {
+  //       updateView({ force: true });
+  //       return;
+  //     }
+  //     if (!await ensureTableAggregatePublicKey(game)) return;
+  //     if (pendingHistorySyncRef.current) {
+  //       pendingHistorySyncRef.current = false;
+  //       sendHistorySync();
+  //       return;
+  //     }
+  //     if (currentSeatNo === 0) {
+  //       continueAfterPokerMessage();
+  //     }
+  //   }).catch((error) => {
+  //     appendGameLog(
+  //       `Table setup failed: ${formatChainError(error)}`,
+  //       'Game',
+  //       'error',
+  //     );
+  //     updateView({ force: true });
+  //   });
+  // }, [
+  //   appendGameLog,
+  //   continueAfterPokerMessage,
+  //   currentSeatNo,
+  //   ensureKeys,
+  //   ensureTableAggregatePublicKey,
+  //   tokenRingSnapshot?.inboundState,
+  //   tokenRingSnapshot?.outboundState,
+  //   sendHistorySync,
+  //   updateView,
+  // ]);
+
+  const effectInitializedRef = useRef(false);
+
   useEffect(() => {
     const connected = tokenRingSnapshot?.inboundState === 'Connected'
       && tokenRingSnapshot?.outboundState === 'Connected';
@@ -2533,8 +2676,13 @@ export function usePokerTable({
 
     if (!connected) {
       if (wasConnected) pendingHistorySyncRef.current = true;
+      effectInitializedRef.current = false; // Reset lock if disconnected
       return;
     }
+
+    // Prevent running repeatedly on every render if already initialized for this connection
+    if (effectInitializedRef.current) return;
+    effectInitializedRef.current = true;
 
     if (
       wasConnected
@@ -2568,15 +2716,9 @@ export function usePokerTable({
       updateView({ force: true });
     });
   }, [
-    appendGameLog,
-    continueAfterPokerMessage,
     currentSeatNo,
-    ensureKeys,
-    ensureTableAggregatePublicKey,
     tokenRingSnapshot?.inboundState,
     tokenRingSnapshot?.outboundState,
-    sendHistorySync,
-    updateView,
   ]);
 
   const actionBarProps = useMemo(() => {

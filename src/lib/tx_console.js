@@ -1,7 +1,19 @@
 import { publicPokerClient } from './publicPokerClient.js';
 
+class TransactionFailedError extends Error {
+  constructor(message, receipt) {
+    super(message);
+    this.name = "TransactionFailedError";
+    this.receipt = receipt;
+  }
+}
+
+function isReceiptSuccess(receipt) {
+  return receipt?.status === 'success';
+}
+
 function receiptStatus(receipt) {
-  return receipt?.status === 'success' ? 'Ok' : 'Err';
+  return isReceiptSuccess(receipt) ? 'Ok' : 'Err';
 }
 
 function receiptLogPayload({ receipt = null, hash = null, functionName, contract, args, error = null }) {
@@ -33,6 +45,12 @@ export async function waitForLoggedTransactionReceipt({
       contract,
       args,
     }));
+    if (receipt.status === 'reverted') {
+      throw new TransactionFailedError(
+        `Transaction ${hash} reverted on block ${receipt.blockNumber}`,
+        receipt
+      );
+    }
     return receipt;
   } catch (error) {
     console.error('[PrivatePoker tx receipt]', receiptLogPayload({

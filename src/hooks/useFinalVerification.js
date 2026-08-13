@@ -18,6 +18,7 @@ import {
 } from '../lib/crum_bls/index.js';
 import { holdemShowdown } from '../lib/crum_pkr/hand_evaluator.js';
 import { POKER_HOLDEM_ROUNDS } from '../lib/crum_pkr/index.js';
+import { toChipUnits } from '@/lib/constants';
 
 export const FINAL_VERIFICATION_SIGNATURE_SCHEME = 'BLS12-381-FINAL-HAND-DIGEST-SCALAR-V1';
 export const TABLE_AGGREGATE_PUBLIC_KEY_SIGNATURE_SCHEME = 'BLS12-381-TABLE-AGGREGATE-PUBLIC-KEY-V1';
@@ -96,42 +97,47 @@ export function buildFinalHandSettlement(hand, tableSeats = []) {
   const foldedWinner = activePlayers.filter(Boolean).length === 1
     ? activePlayers.findIndex(Boolean)
     : null;
+
   const payoutForWinner = (winner) => Array.from({ length: numPlayers }, (_, player) => (
     player === winner ? payoutAmount : 0
   ));
 
+  let rawPotSplit = [];
+  let rawBalances = [];
+  let winner = null;
+
   if (foldedWinner != null) {
-    return {
-      winner: foldedWinner,
-      winner_player_address: tableSeats[foldedWinner]?.playerAddress ?? null,
-      pot_size_per_player: payoutForWinner(foldedWinner),
-      chips_balances: chipStacks(hand, foldedWinner, payoutAmount),
-    };
+    winner = foldedWinner;
+    rawPotSplit = payoutForWinner(foldedWinner);
+    rawBalances = chipStacks(hand, foldedWinner, payoutAmount);
+  } else {
+    const deck = hand.get_poker_deck();
+    const playerCards = hand.get_player_cards().map((cardSet) => {
+      try {
+        return cardsToStrings(deck.unmasked_cards(cardSet));
+      } catch {
+        return [];
+      }
+    });
+    const communityCards = [];
+    for (let round = 0; round < POKER_HOLDEM_ROUNDS; round += 1) {
+      const cards = hand.get_community_cards(round);
+      if (cards) {
+        communityCards.push(...cardsToStrings(deck.unmasked_cards(cards)));
+      }
+    }
+
+    const showdown = holdemShowdown(playerCards, communityCards, activePlayers);
+    winner = showdown.winner;
+    rawPotSplit = winner == null ? Array(numPlayers).fill(0) : payoutForWinner(winner);
+    rawBalances = chipStacks(hand, winner, winner == null ? 0 : payoutAmount);
   }
 
-  const deck = hand.get_poker_deck();
-  const playerCards = hand.get_player_cards().map((cardSet) => {
-    try {
-      return cardsToStrings(deck.unmasked_cards(cardSet));
-    } catch {
-      return [];
-    }
-  });
-  const communityCards = [];
-  for (let round = 0; round < POKER_HOLDEM_ROUNDS; round += 1) {
-    const cards = hand.get_community_cards(round);
-    if (cards) {
-      communityCards.push(...cardsToStrings(deck.unmasked_cards(cards)));
-    }
-  }
-
-  const showdown = holdemShowdown(playerCards, communityCards, activePlayers);
-  const winner = showdown.winner;
   return {
     winner,
     winner_player_address: winner == null ? null : tableSeats[winner]?.playerAddress ?? null,
-    pot_size_per_player: winner == null ? Array(numPlayers).fill(0) : payoutForWinner(winner),
-    chips_balances: chipStacks(hand, winner, winner == null ? 0 : payoutAmount),
+    pot_size_per_player: rawPotSplit.map((amt) => Number(toChipUnits(amt))),
+    chips_balances: rawBalances.map((amt) => Number(toChipUnits(amt))),
   };
 }
 
@@ -840,6 +846,7 @@ export function useFinalVerification({ onOperatorTopUp } = {}) {
     let hash;
     try {
       if (operatorPrivateKey) {
+        console.info(`writeContract [from Operator] ${PRIVATE_POKER_CONTRACT_ADDRESS} ${functionName}:`, args);
         hash = await writeContractFromOperator({
           operatorPrivateKey,
           contract: PRIVATE_POKER_CONTRACT_ADDRESS,
@@ -856,6 +863,7 @@ export function useFinalVerification({ onOperatorTopUp } = {}) {
         return hash;
       }
 
+      console.info(`writeContract [from Wallet] ${PRIVATE_POKER_CONTRACT_ADDRESS} ${functionName}:`, args);
       const overrides = address
         ? await getBufferedGasOverrides(publicPokerClient, {
           address: PRIVATE_POKER_CONTRACT_ADDRESS,
