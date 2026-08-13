@@ -95,7 +95,7 @@ export default function FlowStepDialog({
         </div>
 
         {error && (
-          <div className="p-3 bg-red-900/50 border border-red-500/50 rounded-lg text-red-400 text-xs font-bold uppercase tracking-widest text-center">
+          <div className="p-3 bg-red-900/50 border border-red-500/50 rounded-lg text-red-400 text-xs font-bold uppercase tracking-widest text-center whitespace-pre-wrap break-all">
             {error}
           </div>
         )}

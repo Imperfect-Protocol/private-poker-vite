@@ -12,12 +12,9 @@ import {
   verify as blsVerify,
 } from '@/lib/crum_bls';
 import {
-  HAND_ID,
-  INITIAL_CHIPS,
   PokerAction,
   PokerActionEnvelopeWire,
   PokerClientState,
-  SMALL_BLIND,
   poker_action_wire_to_submit,
 } from '@/lib/crum_net';
 import {
@@ -30,12 +27,32 @@ import {
   communityCardConsoleLines,
 } from '@/lib/crum_pkr';
 import { holdemShowdown } from '@/lib/crum_pkr/hand_evaluator';
+import { useCountdown } from '@/hooks/useCountdown';
+import { buildFinalHandSettlement, useFinalVerification } from '@/hooks/useFinalVerification';
+import { VirtualTokenRing } from '@/hooks/useTokenRing.js';
+import { formatChainError } from '@/lib/chain/errors.js';
+import {
+  TABLE_PROTOCOL_STATE_HAND_IN_PROGRESS,
+  TABLE_PROTOCOL_STATE_HAND_DISPUTED,
+  TABLE_PROTOCOL_STATE_START_HAND,
+  TABLE_PROTOCOL_STATE_TABLE_AGGREGATE_PUBLIC_KEY,
+  TABLE_PROTOCOL_STATE_TABLE_COMPLETE,
+  TABLE_PROTOCOL_STATE_SETTLE_HAND,
+  TableProtocolState,
+  tableProtocolStateType,
+} from '@/lib/table_protocol_state.js';
+import { getBlindsForBuyin } from '@/lib/stakes';
+import { fromChipUnits } from '@/lib/constants';
 
 const HISTORY_MESSAGE = 'History';
 const CHAT_MESSAGE = 'ChatMessage';
-const ACTION_SIGNATURE_SCHEME = 'BLS12-381-G1-PK-G2-SIG';
+const SETTLE_HAND_MESSAGE = 'SettleHand';
+const START_HAND_MESSAGE = 'StartHand';
+const TABLE_AGGREGATE_PUBLIC_KEY_MESSAGE = 'TableAggregatePublicKey';
+const ACTION_SIGNATURE_SCHEME = 'BLS12-381-G2-PK-G1-SIG';
 const BETTING_UI_STATES = new Set(['PreFlop', 'Flop', 'Turn', 'River']);
 const BAD_UNMASK_G1 = G1.BASE.toRawBytes(true);
+const HAND_ID = 1;
 const textEncoder = new TextEncoder();
 
 function shallowEqual(left, right) {
@@ -340,30 +357,27 @@ function handHistoryTipKey({ tableId, handId, historyEntries = [] } = {}) {
   ].join(':');
 }
 
-function makePokerTable(numPlayers) {
-  const table = PokerTable.new(numPlayers, POKER_HOLDEM_ROUNDS);
-  for (let player = 1; player <= numPlayers; player += 1) {
-    table.join(player);
-  }
-  table.start_hand(Array(numPlayers).fill(INITIAL_CHIPS), SMALL_BLIND, 0);
-  return table;
-}
+function makePokerTable(numPlayers, buyIn, smallBlind) {
+  const numericBuyIn = Number(buyIn);
+  const numericSmallBlind = Number(smallBlind);
 
-function makePokerTableForHand(numPlayers, handSetup) {
+  if (
+    !numPlayers ||
+    !Number.isSafeInteger(numericBuyIn) ||
+    numericBuyIn < 0 ||
+    !Number.isSafeInteger(numericSmallBlind) ||
+    numericSmallBlind < 0
+  ) {
+    return null;
+  }
+
   const table = PokerTable.new(numPlayers, POKER_HOLDEM_ROUNDS);
   for (let player = 1; player <= numPlayers; player += 1) {
     table.join(player);
   }
-  const handNumber = Math.max(1, Number(handSetup?.hand_number ?? handSetup?.hand_id ?? HAND_ID));
-  const initialChips = Array.isArray(handSetup?.initial_chips) && handSetup.initial_chips.length === numPlayers
-    ? handSetup.initial_chips.map((chips) => Number(chips))
-    : Array(numPlayers).fill(INITIAL_CHIPS);
-  const smallBlind = Number(handSetup?.small_blind ?? SMALL_BLIND);
-  const dealerButton = Number(handSetup?.dealer_button ?? 0);
-  table.hand_number = handNumber - 1;
-  table.start_hand(initialChips, smallBlind, dealerButton);
-  table.hand_number = handNumber;
-  table.clear_events?.();
+
+  // Strictly pass numeric primitive integers
+  table.start_hand(Array(numPlayers).fill(numericBuyIn), numericSmallBlind, 0);
   return table;
 }
 
@@ -435,15 +449,16 @@ function nextDealerSeatNumber(pokerTable) {
   return ((pokerTable.dealer_button ?? 0) + 1) % maxPlayers;
 }
 
-function chipStackSize(chips) {
-  if (chips <= INITIAL_CHIPS * 0.5) return 'Small';
-  if (chips <= INITIAL_CHIPS) return 'Medium';
-  if (chips <= INITIAL_CHIPS * 1.5) return 'Big';
+function chipStackSize(chips, buyIn) {
+  if (!buyIn) return 'Medium';
+  if (chips <= buyIn * 0.5) return 'Small';
+  if (chips <= buyIn) return 'Medium';
+  if (chips <= buyIn * 1.5) return 'Big';
   return 'ExtraLarge';
 }
 
-function chipStackSizes(stacks) {
-  return stacks.map(chipStackSize);
+function chipStackSizes(stacks, buyIn) {
+  return stacks.map((chips) => chipStackSize(chips, buyIn));
 }
 
 function tableViewPatch(clientState, signingKey, viewerSeatNo = null) {
@@ -521,7 +536,7 @@ function eventDisplayLine(event) {
     case 'hand_ended':
       return `Hand Ended; Player ${seat} submits public key first`;
     case 'hand_result':
-      return `Hand Result: Player ${seat} pot $${event.pot_size}`;
+      return 'Hand result pending final settlement';
     default:
       return null;
   }
@@ -570,12 +585,66 @@ function gameStateName(pokerState) {
   return pokerState.type;
 }
 
-function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null) {
+function playerCompletedFinalSettlement(game, playerIndex) {
+  return (game?.finalVerificationSignatureShares ?? []).some((share) => (
+    Number(share?.signer_seat) === Number(playerIndex)
+  ));
+}
+
+function settlementWinnerIndex(settlement, tableSeats = []) {
+  const payouts = settlement?.pot_size_per_player ?? [];
+  const payoutWinner = payouts.findIndex((amount) => Number(amount) > 0);
+  if (payoutWinner >= 0) return payoutWinner;
+
+  const winnerAddress = settlement?.winner_player_address?.toLowerCase?.();
+  if (!winnerAddress) return null;
+  const addressWinner = tableSeats.findIndex((seat) => (
+    seat?.playerAddress?.toLowerCase?.() === winnerAddress
+  ));
+  return addressWinner >= 0 ? addressWinner : null;
+}
+
+function protocolType(gameOrState) {
+  return tableProtocolStateType(gameOrState?.tableProtocolState ?? gameOrState);
+}
+
+function transitionTableProtocol(game, nextState) {
+  if (!game || !nextState?.type) return nextState;
+  game.tableProtocolState = nextState;
+  return nextState;
+}
+
+function protocolStateOr(game, fallbackState) {
+  return game?.tableProtocolState ?? fallbackState;
+}
+
+function startHandState(game, fallbackHandId = null) {
+  const state = game?.tableProtocolState;
+  if (protocolType(state) === TABLE_PROTOCOL_STATE_START_HAND) {
+    return state;
+  }
+  return TableProtocolState.startHand({ handId: fallbackHandId });
+}
+
+function settleHandState(game, fallbackHandId = null) {
+  const state = game?.tableProtocolState;
+  if (protocolType(state) === TABLE_PROTOCOL_STATE_SETTLE_HAND) {
+    return state;
+  }
+  return TableProtocolState.settleHand({ handId: fallbackHandId });
+}
+
+function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null, tableSeats = []) {
   const hand = game?.clientState.current_hand();
+  const tableBuyIn = game?.currentHandSetup?.initial_chips?.[0] ?? tableSeats[0]?.chips;
   const viewerPlayerIndex = viewerSeatNo ?? game?.clientState.player_index ?? 0;
   if (!game || !hand) {
     return {
       state: 'Waiting',
+      tableProtocolState: protocolType(protocolStateOr(
+        game,
+        TableProtocolState.tableAggregatePublicKey(),
+      )),
       seat: null,
       pot: 0,
       minBet: 0,
@@ -598,14 +667,17 @@ function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null) {
     const allInPlayers = hand.betting_state?.allin_players ?? [];
     return {
       state: 'Cheated',
+      tableProtocolState: protocolType(protocolStateOr(
+        game,
+        TableProtocolState.handDisputed(),
+      )),
       seat,
-      canStartNextHand: true,
       pot: Number(hand.betting_state?.pot?.toString?.() ?? 0),
       minBet: safeCallAmount(hand, viewerPlayerIndex),
       maxBet: safeChipsRemaining(hand, viewerPlayerIndex),
       step: hand.get_small_blind(),
       chipStacks: stacks,
-      chipStackSizes: chipStackSizes(stacks),
+      chipStackSizes: chipStackSizes(stacks, tableBuyIn),
       hands: hand.get_player_cards().map(() => ({ cards: [], rank: null, isWinner: false })),
       winner: null,
       resultText: cheatReport.player === viewerPlayerIndex ? 'Cheater' : 'Game Cheated',
@@ -627,6 +699,7 @@ function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null) {
 
   if (isShowdownState) {
     const activePlayers = hand.betting_state?.active_players ?? [];
+    const finalSettlementComplete = playerCompletedFinalSettlement(game, viewerPlayerIndex);
     const playerCards = hand.get_player_cards().map((cardSet, player) => {
       if (activePlayers[player] === false) return [];
       try {
@@ -635,54 +708,53 @@ function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null) {
         return [];
       }
     });
-    const communityCards = [];
-    for (let round = 0; round < POKER_HOLDEM_ROUNDS; round += 1) {
-      const cards = hand.get_community_cards(round);
-      if (cards) {
-        communityCards.push(...cardsToStrings(deck.unmasked_cards(cards)));
-      }
-    }
     const allInPlayers = hand.betting_state?.allin_players ?? [];
     const payoutAmount = Number(hand.betting_state?.pot?.toString?.() ?? 0);
-    const foldedWinner = activePlayers.filter(Boolean).length === 1
-      ? activePlayers.findIndex(Boolean)
-      : null;
-    const showdown = foldedWinner == null
-      ? holdemShowdown(playerCards, communityCards, activePlayers)
-      : {
-        hands: playerCards.map(() => ({
-          cards: [],
-          rank: null,
-        })),
-        winner: foldedWinner,
-      };
-    const hands = showdown.hands.map((showdownHand, index) => ({
-      ...showdownHand,
-      isWinner: showdown.winner === index,
+    const settlement = finalSettlementComplete ? game.finalHandSettlement : null;
+    const settlementWinner = settlementWinnerIndex(settlement, tableSeats);
+
+    const settlementPayout = settlementWinner == null
+      ? 0
+      : Number(fromChipUnits(settlement?.pot_size_per_player?.[settlementWinner] ?? 0));
+
+    const hands = playerCards.map((cards, index) => ({
+      cards,
+      rank: null,
+      isWinner: finalSettlementComplete && settlementWinner === index,
     }));
-    const playerWon = showdown.winner != null && showdown.winner === viewerPlayerIndex;
-    const stacks = chipStacks(hand, showdown.winner, showdown.winner == null ? 0 : payoutAmount);
+
+    const playerWon = settlementWinner != null && settlementWinner === viewerPlayerIndex;
+
+    const stacks = finalSettlementComplete
+      ? (settlement?.chips_balances ?? []).map((chips) => Number(fromChipUnits(chips)))
+      : chipStacks(hand);
+
+    const revealedWinner = finalSettlementComplete ? settlementWinner : null;
 
     return {
-      state: 'Showdown',
+      state: pokerState.type === 'Finished' && !finalSettlementComplete ? 'FinalSettlement' : 'Showdown',
+      tableProtocolState: protocolType(protocolStateOr(game, (
+        pokerState.type === 'Finished'
+          ? TableProtocolState.settleHand({ handId: game?.clientState?.hand_id })
+          : TableProtocolState.handInProgress({ handId: game?.clientState?.hand_id })
+      ))),
       seat,
-      canStartNextHand: pokerState.type === 'Finished',
       pot: payoutAmount,
       minBet: safeCallAmount(hand, viewerPlayerIndex),
       maxBet: safeChipsRemaining(hand, viewerPlayerIndex),
       step: hand.get_small_blind(),
       chipStacks: stacks,
-      chipStackSizes: chipStackSizes(stacks),
+      chipStackSizes: chipStackSizes(stacks, tableBuyIn),
       hands,
-      winner: showdown.winner,
-      resultText: showdown.winner == null ? null : playerWon ? 'You Win' : 'You Lose',
-      resultRank: showdown.winner == null ? null : hands[showdown.winner]?.rank ?? null,
-      resultWinner: showdown.winner,
-      payout: showdown.winner == null
+      winner: revealedWinner,
+      resultText: revealedWinner == null ? null : playerWon ? 'You Win' : 'You Lose',
+      resultRank: null,
+      resultWinner: revealedWinner,
+      payout: revealedWinner == null
         ? null
         : {
-          amount: payoutAmount,
-          winner: showdown.winner,
+          amount: settlementPayout,
+          winner: revealedWinner,
           icon: 'coins',
         },
       activePlayers,
@@ -695,13 +767,17 @@ function currentGameStateFrom(game, viewerSeatNo = null, cheatReport = null) {
 
   return {
     state: gameStateName(pokerState),
+    tableProtocolState: protocolType(protocolStateOr(
+      game,
+      TableProtocolState.handInProgress({ handId: game?.clientState?.hand_id }),
+    )),
     seat,
     pot: Number(hand.betting_state?.pot?.toString?.() ?? 0),
     minBet: safeCallAmount(hand, viewerPlayerIndex),
     maxBet: safeChipsRemaining(hand, viewerPlayerIndex),
     step: hand.get_small_blind(),
     chipStacks: chipStacks(hand),
-    chipStackSizes: chipStackSizes(chipStacks(hand)),
+    chipStackSizes: chipStackSizes(chipStacks(hand), tableBuyIn),
     payout: null,
     activePlayers,
     allInPlayers,
@@ -804,24 +880,39 @@ function actionSnapshotFromState({
   const waitingForSmallBlind = stateName === 'SmallBlind' && isMyTurn && !isAllIn;
   const waitingForBigBlind = stateName === 'BigBlind' && isMyTurn && !isAllIn;
   const waitingForBlind = waitingForSmallBlind || waitingForBigBlind;
-  const availableChips = Number(currentGameState?.maxBet ?? viewPatch?.max_bet ?? INITIAL_CHIPS);
+
+  // Derive small & big blinds strictly from passed-in state/view patch
+  const smallBlind = viewPatch?.small_blind ?? currentGameState?.step;
+  const bigBlind = viewPatch?.big_blind ?? (smallBlind !== undefined ? smallBlind * 2 : undefined);
+
+  // Available chips (strictly from on-chain state, undefined if uninitialized)
+  const availableChips = currentGameState?.maxBet ?? viewPatch?.max_bet;
+
+  // Compute required blind amount
   const requiredBlindAmount = waitingForSmallBlind
-    ? Number(viewPatch?.small_blind ?? SMALL_BLIND)
+    ? smallBlind
     : waitingForBigBlind
-      ? Number(viewPatch?.big_blind ?? SMALL_BLIND * 2)
-      : Number(currentGameState?.minBet ?? viewPatch?.min_bet ?? SMALL_BLIND);
-  const blindAmount = waitingForBlind
-    ? Math.max(0, Math.min(requiredBlindAmount, availableChips))
+      ? bigBlind
+      : Number(currentGameState?.minBet ?? viewPatch?.min_bet);
+
+  // Clamp blind to available chips
+  const blindAmount = waitingForBlind && requiredBlindAmount !== undefined && availableChips !== undefined
+    ? Math.max(0, Math.min(requiredBlindAmount, Number(availableChips)))
     : requiredBlindAmount;
+
+  // Single declaration of actionMinBet
   const actionMinBet = waitingForBlind
     ? blindAmount
-    : Number(currentGameState?.minBet ?? viewPatch?.min_bet ?? SMALL_BLIND);
+    : Number(currentGameState?.minBet ?? viewPatch?.min_bet ?? smallBlind);
+
   const onlyCallMode = waitingForBet
     && bettingPlayers.length === 1
     && activePlayers[playerIndex] === true
     && allInPlayers[playerIndex] !== true
     && activeAllInCount > 0;
   const onlyCheckMode = onlyCallMode && actionMinBet === 0;
+
+  const step = Number(currentGameState?.step ?? viewPatch?.bet_step ?? smallBlind);
 
   return {
     ...previousSnapshot,
@@ -830,10 +921,10 @@ function actionSnapshotFromState({
     waitingForBet,
     waitingForBlind,
     canAct: isMyTurn && !isFolded && !isAllIn,
-    stateLabel: viewPatch?.state_label ?? previousSnapshot.stateLabel,
+    stateLabel: viewPatch?.state_label ?? previousSnapshot?.stateLabel,
     minBet: actionMinBet,
-    maxBet: availableChips,
-    step: Number(currentGameState?.step ?? viewPatch?.bet_step ?? SMALL_BLIND),
+    maxBet: availableChips !== undefined ? Number(availableChips) : undefined,
+    step,
     actionAmount: waitingForBlind ? blindAmount : actionMinBet,
     primaryLabel: waitingForSmallBlind
       ? 'Small Blind'
@@ -886,10 +977,11 @@ function cheatReportFromError(error, fallbackPlayer = null) {
 
 export function usePokerTable({
   table,
-  networkSnapshot,
-  publishMessage,
-  prepareNetworkSession,
-  prepareHandSession,
+  networkSnapshot: injectedNetworkSnapshot,
+  publishMessage: injectedPublishMessage,
+  prepareNetworkSession: injectedPrepareNetworkSession,
+  prepareHandSession: injectedPrepareHandSession,
+  onOperatorTopUp,
 } = {}) {
   const [snapshot, setSnapshot] = useState({
     started: false,
@@ -898,10 +990,10 @@ export function usePokerTable({
     waitingForBlind: false,
     canAct: false,
     stateLabel: 'Waiting',
-    minBet: SMALL_BLIND,
-    maxBet: 100,
-    step: SMALL_BLIND,
-    actionAmount: SMALL_BLIND,
+    minBet: undefined,
+    maxBet: undefined,
+    step: undefined,
+    actionAmount: undefined,
     primaryLabel: 'Raise',
     sliderDisabled: false,
     hideCall: false,
@@ -921,6 +1013,7 @@ export function usePokerTable({
     protocolActionState: null,
     viewPatch: {},
   });
+  const { countdown, startCountdown } = useCountdown();
   const [gameMessages, setGameMessages] = useState([]);
   const [cheatReport, setCheatReport] = useState(null);
   const [terminalResult, setTerminalResult] = useState(null);
@@ -933,6 +1026,7 @@ export function usePokerTable({
   const previousConnectedRef = useRef(false);
   const pendingHistorySyncRef = useRef(false);
   const protocolActionInFlightRef = useRef(null);
+  const finalVerificationInFlightRef = useRef(false);
   const debugCheatsRef = useRef({
     badPk: false,
     badShuffle: false,
@@ -940,8 +1034,31 @@ export function usePokerTable({
   });
   const tableSeats = useMemo(() => table?.seats ?? [], [table?.seats]);
   const tableId = table?.tableData?.id;
+  const lobbyId = table?.lobbyId;
   const tableMaxSeats = table?.tableData?.maxSeats;
+  const tableCurrentHand = Number(table?.tableData?.currentHand ?? 0);
+  const tableCurrentHandRef = useRef(tableCurrentHand);
+  tableCurrentHandRef.current = tableCurrentHand;
   const currentSeatNo = table?.currentSeat?.seatNo;
+  const fallbackTokenRing = useMemo(() => new VirtualTokenRing({
+    currentSeatNo,
+    seatCount: Number(tableMaxSeats || tableSeats.length || 0),
+  }), [currentSeatNo, tableMaxSeats, tableSeats.length]);
+  const tokenRing = table?.tokenRing?.ring ?? fallbackTokenRing;
+  const tokenRingTransport = table?.tokenRing;
+  const publishTokenMessage = injectedPublishMessage ?? tokenRingTransport?.publishMessage;
+  const tokenRingSnapshot = injectedNetworkSnapshot ?? tokenRingTransport?.networkSnapshot;
+  const prepareTokenNetworkSession = injectedPrepareNetworkSession
+    ?? tokenRingTransport?.prepareNetworkSession;
+  const prepareTokenHandSession = injectedPrepareHandSession
+    ?? tokenRingTransport?.prepareHandSession;
+  const {
+    buildNextFinalVerification,
+    buildNextTableAggregatePublicKeyVerification,
+    setTableAggregatePublicKeyOnChain,
+    startHandOnChain,
+    submitFinalHandOnChain,
+  } = useFinalVerification({ onOperatorTopUp });
 
   const senderForSeat = useCallback((seatNo) => {
     const seat = tableSeats[seatNo];
@@ -977,26 +1094,69 @@ export function usePokerTable({
 
   const resetGame = useCallback(() => {
     const numPlayers = Number(tableMaxSeats || 0);
-    if (!numPlayers || tableId == null) return null;
+    const buyIn = table?.tableData?.buyin;
+    const smallBlind = table?.tableData?.blinds?.smallBlind ?? getBlindsForBuyin(buyIn)?.smallBlind;
 
-    const pokerTable = makePokerTable(numPlayers);
+    // STRICT: If on-chain details aren't loaded yet, do not instantiate with fake defaults
+    if (!numPlayers || tableId == null || buyIn === undefined || smallBlind === undefined) {
+      return null;
+    }
+
+    const chainCurrentHand = Number.isFinite(tableCurrentHandRef.current)
+      ? tableCurrentHandRef.current
+      : 0;
+    const previousGame = gameRef.current;
+    const previousHand = previousGame?.clientState?.current_hand?.();
+    const recoveredHandState = chainCurrentHand > 0
+      && Number(previousGame?.clientState?.hand_id ?? 0) === chainCurrentHand
+      && previousHand
+      && !previousHand.get_current_state?.().is_finished?.();
+    const initialProtocolState = chainCurrentHand === 0
+      ? TableProtocolState.tableAggregatePublicKey()
+      : recoveredHandState
+        ? TableProtocolState.handInProgress({
+          handId: chainCurrentHand,
+          handSetup: previousGame?.currentHandSetup ?? null,
+        })
+        : TableProtocolState.startHand({ handId: chainCurrentHand + 1 });
+
+    const pokerTable = makePokerTable(numPlayers, buyIn, smallBlind);
+    if (!pokerTable) return null;
+
+    pokerTable.hand_number = chainCurrentHand;
     const clientState = PokerClientState.new(
       currentSeatNo ?? 0,
       Number(tableId),
-      HAND_ID,
+      chainCurrentHand,
       pokerTable,
     );
     gameRef.current = {
       clientState,
       signingKey: null,
       publicKey: null,
+      tableSigningKey: null,
+      tablePublicKey: null,
+      tableSignaturePublicKey: null,
+      tableKeys: null,
       handKeyHandId: null,
       handKeys: new Map(),
+      publicKeySubmissions: new Map(),
+      tableProtocolState: initialProtocolState,
+      tableAggregatePublicKeyPromise: null,
+      tableAggregatePublicKey: null,
+      tableAggregatePublicKeyPublicKeyShares: [],
+      tableAggregatePublicKeySignatureShares: [],
+      tableAggregatePublicKeyDigest: null,
+      startHandPromise: null,
+      finalVerificationSignatureShares: [],
+      finalVerificationDigest: null,
+      finalHandSettlement: null,
+      finalVerificationSettlementTx: null,
       currentHandSetup: {
-        hand_id: HAND_ID,
-        hand_number: HAND_ID,
-        initial_chips: Array(numPlayers).fill(INITIAL_CHIPS),
-        small_blind: SMALL_BLIND,
+        hand_id: chainCurrentHand,
+        hand_number: chainCurrentHand,
+        initial_chips: Array(numPlayers).fill(buyIn),
+        small_blind: smallBlind,
         dealer_button: 0,
       },
       shuffleTrace: null,
@@ -1011,6 +1171,7 @@ export function usePokerTable({
     seenHistoryTipsRef.current = new Set();
     previousConnectedRef.current = false;
     pendingHistorySyncRef.current = false;
+    finalVerificationInFlightRef.current = false;
     cheatReportRef.current = null;
     setCheatReport(null);
     setTerminalResult(null);
@@ -1023,7 +1184,7 @@ export function usePokerTable({
 
     const viewerSeatNo = currentSeatNo ?? null;
     const patch = tableViewPatch(game.clientState, game.signingKey, viewerSeatNo);
-    const currentGameState = currentGameStateFrom(game, viewerSeatNo, cheatReportRef.current);
+    const currentGameState = currentGameStateFrom(game, viewerSeatNo, cheatReportRef.current, tableSeats);
     const protocolActionState = protocolActionStateFrom(game);
     const nextCurrentGameState = !force && shallowEqual(
       lastSnapshotRef.current.currentGameState,
@@ -1048,7 +1209,7 @@ export function usePokerTable({
       setSnapshot(nextSnapshot);
     }
     return nextSnapshot;
-  }, [currentSeatNo]);
+  }, [currentSeatNo, tableSeats]);
 
   const ensureKeys = useCallback(async (handNumber = null) => {
     const game = gameRef.current ?? resetGame();
@@ -1057,35 +1218,386 @@ export function usePokerTable({
     if (
       game.signingKey
       && game.publicKey
+      && game.tableSigningKey
+      && game.tablePublicKey
+      && game.tableSignaturePublicKey
       && Number(game.handKeyHandId) === targetHandNumber
     ) return game;
-    if (currentSeatNo == null || (!prepareHandSession && !prepareNetworkSession)) return null;
+    if (currentSeatNo == null || (!prepareTokenHandSession && !prepareTokenNetworkSession)) return null;
 
+    const tableKeys = game.tableKeys
+      ?? (prepareTokenNetworkSession ? await prepareTokenNetworkSession() : null);
     const cachedKeys = game.handKeys?.get(targetHandNumber);
     const keys = cachedKeys
-      ?? (prepareHandSession
-        ? await prepareHandSession(targetHandNumber)
-        : await prepareNetworkSession());
+      ?? (prepareTokenHandSession
+        ? await prepareTokenHandSession(targetHandNumber)
+        : tableKeys);
     if (!cachedKeys) {
       const handKeys = game.handKeys ?? new Map();
       handKeys.set(targetHandNumber, keys);
       game.handKeys = handKeys;
     }
     const signingKey = make_signing_key_from_seed(hexToBytes(keys.privateKey));
+    const tableSigningKey = tableKeys
+      ? make_signing_key_from_seed(hexToBytes(tableKeys.privateKey))
+      : null;
     const nextGame = {
       ...game,
       signingKey,
       publicKey: make_public_key_from_signing_key(signingKey),
+      tableSigningKey,
+      tablePublicKey: tableSigningKey ? make_public_key_from_signing_key(tableSigningKey) : null,
+      tableSignaturePublicKey: tableSigningKey ? make_public_key_from_signing_key(tableSigningKey) : null,
+      tableKeys,
+      operatorPrivateKey: keys.operatorPrivateKey ?? tableKeys?.operatorPrivateKey,
       handKeyHandId: targetHandNumber,
     };
     gameRef.current = nextGame;
     return nextGame;
-  }, [currentSeatNo, prepareHandSession, prepareNetworkSession, resetGame]);
+  }, [currentSeatNo, prepareTokenHandSession, prepareTokenNetworkSession, resetGame]);
+
+  const requiredTableAggregateSeats = useCallback(() => {
+    const requiredSeats = Number(tableMaxSeats || tableSeats.length || 0);
+    const announcedSeats = tableSeats.slice(0, requiredSeats);
+    if (
+      requiredSeats <= 0
+      || announcedSeats.length !== requiredSeats
+      || announcedSeats.some((seat) => !seat?.playerAddress || !seat?.announcePublicKey)
+    ) {
+      throw new Error('Table aggregate public key requires every player announce key.');
+    }
+    return announcedSeats;
+  }, [tableMaxSeats, tableSeats]);
+
+  const publishTableAggregatePublicKeyMessage = useCallback((game, tableAggregateVerification) => {
+    const nextPlayer = Number.isFinite(Number(tableAggregateVerification.nextSeat))
+      ? Number(tableAggregateVerification.nextSeat)
+      : null;
+    publishTokenMessage({
+      type: TABLE_AGGREGATE_PUBLIC_KEY_MESSAGE,
+      ...tokenRing.messageFields(game, { currentPlayer: nextPlayer }),
+      lobby_id: lobbyId?.toString?.() ?? String(lobbyId ?? ''),
+      table_id: tableId?.toString?.() ?? String(tableId ?? ''),
+      aggregate_public_key: tableAggregateVerification.aggregatePublicKey,
+      aggregate_public_key_digest: tableAggregateVerification.tableAggregatePublicKeyDigest,
+      public_key_shares: tableAggregateVerification.publicKeyShares,
+      signature_shares: tableAggregateVerification.signatureShares,
+      signer_seats: tableAggregateVerification.signerSeats,
+      aggregate_signature: tableAggregateVerification.aggregateSignature,
+    });
+  }, [lobbyId, publishTokenMessage, tableId, tokenRing]);
+
+  const requiredStartHandSeats = useCallback(() => (
+    Number(tableMaxSeats || tableSeats.length || 0)
+  ), [tableMaxSeats, tableSeats.length]);
+
+  const nextOnChainHandId = useCallback((game) => (
+    Number(startHandState(game, Number(game?.clientState?.hand_id ?? 0) + 1).handId
+      ?? Number(game?.clientState?.hand_id ?? 0) + 1)
+  ), []);
+
+  const recordStartHandConfirmation = useCallback((game, seatNo, handId, hash = null) => {
+    if (!game || seatNo == null) return false;
+    const targetHandId = Number(handId ?? nextOnChainHandId(game));
+    const state = startHandState(game, targetHandId);
+    const confirmations = (state.confirmations ?? [])
+      .filter((entry) => Number(entry.hand_id) === targetHandId);
+    if (confirmations.some((entry) => Number(entry.seat_no) === Number(seatNo))) {
+      transitionTableProtocol(game, TableProtocolState.startHand({
+        handId: targetHandId,
+        confirmations,
+      }));
+      return false;
+    }
+    confirmations.push({
+      seat_no: Number(seatNo),
+      hand_id: targetHandId,
+      tx: hash,
+    });
+    transitionTableProtocol(game, TableProtocolState.startHand({
+      handId: targetHandId,
+      confirmations,
+    }));
+    return true;
+  }, [nextOnChainHandId]);
+
+  const startHandRoundComplete = useCallback((game, handId = null) => {
+    const requiredSeats = requiredStartHandSeats();
+    const targetHandId = Number(handId ?? nextOnChainHandId(game));
+    if (!game || requiredSeats <= 0) return false;
+    const confirmedSeats = new Set(
+      (startHandState(game, targetHandId).confirmations ?? [])
+        .filter((entry) => Number(entry.hand_id) === targetHandId)
+        .map((entry) => Number(entry.seat_no)),
+    );
+    return confirmedSeats.size >= requiredSeats;
+  }, [nextOnChainHandId, requiredStartHandSeats]);
+
+  const markOnChainHandStarted = useCallback((game, handId) => {
+    const targetHandId = Number(handId);
+    if (!game || !targetHandId) return;
+
+    const buyIn = table?.tableData?.buyin;
+    const smallBlind = table?.tableData?.blinds?.smallBlind ?? getBlindsForBuyin(buyIn)?.smallBlind;
+
+    if (buyIn === undefined || smallBlind === undefined) return;
+
+    const currentHand = game.clientState.current_hand?.();
+    const currentHandId = Number(game.clientState.hand_id ?? 0);
+    const needsLocalNextHand = currentHand?.get_current_state?.().is_finished?.()
+      && targetHandId >= currentHandId;
+
+    if (needsLocalNextHand) {
+      const nextStacks = finalHandStacks(currentHand);
+      const initialChips = nextStacks.length > 0
+        ? nextStacks
+        : Array(game.clientState.table.get_current_player_count()).fill(buyIn);
+
+      const smallBlind = currentHand.get_small_blind();
+      const dealerSeatNumber = nextDealerSeatNumber(game.clientState.table);
+      game.clientState.table.start_hand(initialChips, smallBlind, dealerSeatNumber);
+      game.currentHandSetup = {
+        hand_id: targetHandId,
+        hand_number: targetHandId,
+        initial_chips: initialChips.map((chips) => Number(chips)),
+        small_blind: smallBlind,
+        dealer_button: dealerSeatNumber,
+      };
+    }
+    if (Number(game.clientState.hand_id ?? 0) < targetHandId) {
+      game.clientState.hand_id = targetHandId;
+      game.clientState.sequence = 0;
+      game.clientState.seen.clear();
+      game.clientState.table.hand_number = targetHandId;
+    }
+    game.currentHandSetup ??= {
+      hand_id: targetHandId,
+      hand_number: targetHandId,
+      initial_chips: Array(requiredStartHandSeats()).fill(buyIn),
+      small_blind: smallBlind,
+      dealer_button: 0,
+    };
+    game.currentHandSetup.hand_id = targetHandId;
+    game.currentHandSetup.hand_number = targetHandId;
+    game.signingKey = null;
+    game.publicKey = null;
+    game.handKeyHandId = null;
+    game.shuffleTrace = null;
+    game.publicKeySubmissions = new Map();
+    game.finalVerificationSignatureShares = [];
+    game.finalVerificationDigest = null;
+    game.finalHandSettlement = null;
+    game.finalVerificationSettlementTx = null;
+    game.seenFinished = false;
+    handHistoryRef.current = [];
+    seenHistoryTipsRef.current = new Set();
+    protocolActionInFlightRef.current = null;
+    finalVerificationInFlightRef.current = false;
+    transitionTableProtocol(game, TableProtocolState.handInProgress({
+      handId: targetHandId,
+      handSetup: game.currentHandSetup,
+    }));
+  }, [requiredStartHandSeats]);
+
+  const publishStartHandMessage = useCallback((game, hash = null, handId = null) => {
+    const targetHandId = Number(handId ?? nextOnChainHandId(game));
+    const currentPlayer = hash
+      ? tokenRing.nextSeatAfter(game?.clientState?.player_index, requiredStartHandSeats())
+      : 0;
+    publishTokenMessage({
+      type: START_HAND_MESSAGE,
+      ...tokenRing.messageFields(game, {
+        currentHand: targetHandId,
+        currentPlayer,
+      }),
+      lobby_id: lobbyId?.toString?.() ?? String(lobbyId ?? ''),
+      table_id: tableId?.toString?.() ?? String(tableId ?? ''),
+      hand_id: targetHandId,
+      hand_number: targetHandId,
+      seat_no: hash ? game?.clientState?.player_index : null,
+      tx: hash,
+      confirmations: startHandState(game, targetHandId).confirmations ?? [],
+    });
+  }, [lobbyId, nextOnChainHandId, publishTokenMessage, requiredStartHandSeats, tableId, tokenRing]);
+
+  const ensureOnChainStartHand = useCallback(async (game) => {
+    if (!game) return false;
+    const targetHandId = nextOnChainHandId(game);
+    if (protocolType(game) === TABLE_PROTOCOL_STATE_HAND_IN_PROGRESS) {
+      return true;
+    }
+    if (startHandRoundComplete(game, targetHandId)) {
+      markOnChainHandStarted(game, targetHandId);
+      return true;
+    }
+    if (game.startHandPromise) return game.startHandPromise;
+    if (startHandState(game, targetHandId).confirmations?.some((entry) => (
+      Number(entry.seat_no) === Number(game.clientState.player_index)
+      && Number(entry.hand_id) === targetHandId
+    ))) {
+      transitionTableProtocol(game, startHandState(game, targetHandId));
+      return false;
+    }
+    if (!lobbyId || !tableId) return false;
+    if (!game.operatorPrivateKey) {
+      throw new Error('Missing operator key for start hand submit.');
+    }
+
+    transitionTableProtocol(game, startHandState(game, targetHandId));
+    const startPromise = (async () => {
+      const hash = await startHandOnChain({
+        lobbyId,
+        tableId,
+        operatorPrivateKey: game.operatorPrivateKey,
+      });
+      recordStartHandConfirmation(game, game.clientState.player_index, targetHandId, hash);
+      appendGameLog(`Start hand submitted on-chain: ${hash}`, 'Game');
+      publishStartHandMessage(game, hash, targetHandId);
+      if (startHandRoundComplete(game, targetHandId)) {
+        markOnChainHandStarted(game, targetHandId);
+        return true;
+      }
+      return false;
+    })();
+
+    game.startHandPromise = startPromise;
+    try {
+      return await startPromise;
+    } finally {
+      game.startHandPromise = null;
+    }
+  }, [
+    appendGameLog,
+    lobbyId,
+    markOnChainHandStarted,
+    nextOnChainHandId,
+    publishStartHandMessage,
+    recordStartHandConfirmation,
+    startHandOnChain,
+    startHandRoundComplete,
+    tableId,
+  ]);
+
+  const submitTableAggregatePublicKeyRound = useCallback(async (game, incoming = null) => {
+    if (!game) return false;
+    if (protocolType(game) !== TABLE_PROTOCOL_STATE_TABLE_AGGREGATE_PUBLIC_KEY) {
+      return protocolType(game) === TABLE_PROTOCOL_STATE_START_HAND
+        || protocolType(game) === TABLE_PROTOCOL_STATE_HAND_IN_PROGRESS
+        || protocolType(game) === TABLE_PROTOCOL_STATE_TABLE_COMPLETE;
+    }
+    if (!lobbyId || !tableId) return false;
+    if (!game.operatorPrivateKey) {
+      throw new Error('Missing operator key for table aggregate public key submit.');
+    }
+
+    const announcedSeats = requiredTableAggregateSeats();
+    const incomingPublicKeyShares = Array.isArray(incoming) ? null : incoming?.publicKeyShares;
+    const incomingSignatureShares = Array.isArray(incoming) ? incoming : incoming?.signatureShares;
+    const publicKeyShares = incomingPublicKeyShares
+      ?? game.tableAggregatePublicKeyPublicKeyShares
+      ?? [];
+    const signatureShares = incomingSignatureShares
+      ?? game.tableAggregatePublicKeySignatureShares
+      ?? [];
+    const tableAggregateVerification = buildNextTableAggregatePublicKeyVerification({
+      lobbyId,
+      tableId,
+      tableSeats: announcedSeats,
+      publicKeyShares,
+      signatureShares,
+      currentSeatNo: game.clientState.player_index,
+      signingKey: game.tableSigningKey,
+      publicKey: game.tableSignaturePublicKey,
+    });
+
+    game.tableAggregatePublicKeyPublicKeyShares = tableAggregateVerification.publicKeyShares;
+    game.tableAggregatePublicKeySignatureShares = tableAggregateVerification.signatureShares;
+    game.tableAggregatePublicKeyDigest = tableAggregateVerification.tableAggregatePublicKeyDigest;
+    game.tableAggregatePublicKey = tableAggregateVerification.aggregatePublicKey;
+    transitionTableProtocol(game, TableProtocolState.tableAggregatePublicKey({
+      publicKeyShares: tableAggregateVerification.publicKeyShares,
+      signatureShares: tableAggregateVerification.signatureShares,
+      aggregatePublicKey: tableAggregateVerification.aggregatePublicKey,
+      digest: tableAggregateVerification.tableAggregatePublicKeyDigest,
+    }));
+
+    if (tableAggregateVerification.complete && !tableAggregateVerification.signed) {
+      return true;
+    }
+
+    if (!tableAggregateVerification.signed) {
+      if (tableAggregateVerification.publicKeyAdded) {
+        publishTableAggregatePublicKeyMessage(game, tableAggregateVerification);
+      }
+      return false;
+    }
+
+    appendGameLog(
+      `Table aggregate public key signed by Player ${game.clientState.player_index + 1}`,
+      senderForSeat(game.clientState.player_index),
+    );
+
+    if (tableAggregateVerification.complete) {
+      const { hash, aggregatePublicKey } = await setTableAggregatePublicKeyOnChain({
+        lobbyId,
+        tableId,
+        tableSeats: announcedSeats,
+        tableAggregateVerification,
+        operatorPrivateKey: game.operatorPrivateKey,
+      });
+      game.tableAggregatePublicKey = aggregatePublicKey;
+      const nextHandId = Number(game.clientState.hand_id ?? 0) + 1;
+      transitionTableProtocol(game, TableProtocolState.startHand({
+        handId: nextHandId,
+        confirmations: [],
+      }));
+      appendGameLog(hash
+        ? `Table aggregate public key submitted on-chain: ${hash}`
+        : 'Table aggregate public key already set on-chain');
+      publishStartHandMessage(game, null, nextHandId);
+      return true;
+    }
+
+    publishTableAggregatePublicKeyMessage(game, tableAggregateVerification);
+    return false;
+  }, [
+    appendGameLog,
+    buildNextTableAggregatePublicKeyVerification,
+    lobbyId,
+    publishTableAggregatePublicKeyMessage,
+    requiredTableAggregateSeats,
+    senderForSeat,
+    setTableAggregatePublicKeyOnChain,
+    publishStartHandMessage,
+    tableId,
+  ]);
+
+  const ensureTableAggregatePublicKey = useCallback(async (game) => {
+    if (!game) return false;
+    if (protocolType(game) !== TABLE_PROTOCOL_STATE_TABLE_AGGREGATE_PUBLIC_KEY) return true;
+    if (game.tableAggregatePublicKeyPromise) return game.tableAggregatePublicKeyPromise;
+    if (Number(game.clientState?.hand_id ?? 0) > 0) {
+      transitionTableProtocol(game, TableProtocolState.handInProgress({
+        handId: Number(game.clientState.hand_id),
+        handSetup: game.currentHandSetup,
+      }));
+      return true;
+    }
+
+    const submitPromise = submitTableAggregatePublicKeyRound(game);
+
+    game.tableAggregatePublicKeyPromise = submitPromise;
+    try {
+      return await submitPromise;
+    } finally {
+      game.tableAggregatePublicKeyPromise = null;
+    }
+  }, [submitTableAggregatePublicKeyRound]);
 
   const signWireHistoryEntry = useCallback((wire, game = gameRef.current) => {
-    if (wire?.nop || !wire?.sequence_number || !game?.signingKey || !game?.publicKey) return null;
+    if (wire?.nop || !wire?.sequence_number || !game?.tableSigningKey || !game?.tablePublicKey) return null;
     const encodedWire = encodeWire(wire);
-    const signature = blsSign(historyEntryPayload(encodedWire), game.signingKey);
+    const signature = blsSign(historyEntryPayload(encodedWire), game.tableSigningKey);
     return {
       sequence_number: Number(encodedWire.sequence_number ?? 0),
       from: encodedWire.from,
@@ -1093,7 +1605,7 @@ export function usePokerTable({
       action_signature: {
         scheme: ACTION_SIGNATURE_SCHEME,
         signer_seat: encodedWire.from,
-        public_key: hexPoint(game.publicKey.toRawBytes(true)),
+        public_key: hexPoint(game.tablePublicKey.toRawBytes(true)),
         signature: hexPoint(signature.toRawBytes(true)),
       },
     };
@@ -1108,20 +1620,20 @@ export function usePokerTable({
     if (signature.scheme !== ACTION_SIGNATURE_SCHEME) return false;
     if (signature.signer_seat != null && Number(signature.signer_seat) !== signerSeat) return false;
 
-    const publicKeyCandidates = [
-      signature.public_key,
-      tableSeats[signerSeat]?.announcePublicKey,
-    ].filter(Boolean);
+    const expectedPublicKey = tableSeats[signerSeat]?.announcePublicKey;
+    if (!expectedPublicKey) return false;
+    if (
+      signature.public_key
+      && signature.public_key.toLowerCase() !== expectedPublicKey.toLowerCase()
+    ) return false;
 
-    return publicKeyCandidates.some((candidate) => {
-      try {
-        const publicKey = make_public_key_from_compressed_slice(hexToBytes(ensureHexPrefix(candidate)));
-        const signed = make_signature_from_compressed_slice(hexToBytes(ensureHexPrefix(signature.signature)));
-        return blsVerify(historyEntryPayload(wire), publicKey, signed);
-      } catch {
-        return false;
-      }
-    });
+    try {
+      const publicKey = make_public_key_from_compressed_slice(hexToBytes(ensureHexPrefix(expectedPublicKey)));
+      const signed = make_signature_from_compressed_slice(hexToBytes(ensureHexPrefix(signature.signature)));
+      return blsVerify(historyEntryPayload(wire), publicKey, signed);
+    } catch {
+      return false;
+    }
   }, [tableSeats]);
 
   const rememberHistoryEntry = useCallback((entry) => {
@@ -1153,8 +1665,12 @@ export function usePokerTable({
     if (wire.nop) {
       wire.sequence_number = latestHandHistorySequence;
     }
+    const handFinished = game?.clientState?.current_hand?.()?.get_current_state?.()?.is_finished?.() === true;
     const message = {
       type: HISTORY_MESSAGE,
+      ...tokenRing.messageFields(game, {
+        currentPlayer: handFinished ? 0 : undefined,
+      }),
       table_id: wire.table_id,
       hand_id: wire.hand_id,
       hand_number: wire.hand_id,
@@ -1165,11 +1681,12 @@ export function usePokerTable({
       hand_history: handHistory,
       wire: encodeWire(wire),
     };
-    publishMessage(message);
+    publishTokenMessage(message);
   }, [
-    publishMessage,
+    publishTokenMessage,
     rememberHistoryEntry,
     signWireHistoryEntry,
+    tokenRing,
   ]);
 
   const applyDebugCheatsToWire = useCallback((wire, game) => {
@@ -1204,10 +1721,14 @@ export function usePokerTable({
     const chatText = text?.trim();
     if (!chatText) return false;
 
-    publishMessage({ type: CHAT_MESSAGE, text: chatText });
+    publishTokenMessage({
+      type: CHAT_MESSAGE,
+      ...tokenRing.messageFields(gameRef.current),
+      text: chatText,
+    });
     appendGameLog(chatText, 'Me');
     return true;
-  }, [appendGameLog, publishMessage]);
+  }, [appendGameLog, publishTokenMessage, tokenRing]);
 
   const armPokerDebugCheat = useCallback((name) => {
     switch (name) {
@@ -1334,8 +1855,204 @@ export function usePokerTable({
     }
   }, []);
 
+  const publishSettleHandMessage = useCallback((game, finalVerification, handId = null) => {
+    const messageHandId = handId ?? game?.clientState?.hand_id;
+    const nextPlayer = Number.isFinite(Number(finalVerification.nextSeat))
+      ? Number(finalVerification.nextSeat)
+      : null;
+    publishTokenMessage({
+      type: SETTLE_HAND_MESSAGE,
+      ...tokenRing.messageFields(game, {
+        currentHand: Number(messageHandId),
+        currentPlayer: nextPlayer,
+      }),
+      lobby_id: lobbyId?.toString?.() ?? String(lobbyId ?? ''),
+      table_id: tableId?.toString?.() ?? String(tableId ?? ''),
+      hand_id: messageHandId,
+      hand_number: messageHandId,
+      hand_setup: game?.currentHandSetup ?? null,
+      hand_history: [...(handHistoryRef.current ?? [])],
+      final_hand_digest: finalVerification.finalHandDigest,
+      settlement_digest: finalVerification.settlementDigest,
+      public_key_shares: finalVerification.publicKeyShares,
+      signature_shares: finalVerification.signatureShares,
+      signer_seats: finalVerification.signerSeats,
+      aggregate_signature: finalVerification.aggregateSignature,
+      aggregate_public_key: finalVerification.aggregatePublicKey,
+      settlement: finalVerification.settlementMessage ?? null,
+    });
+  }, [lobbyId, publishTokenMessage, tableId, tokenRing]);
+
+  const submitFinalVerificationRound = useCallback(async (game, incoming = null) => {
+    const hand = game?.clientState?.current_hand?.();
+    if (!game || !hand?.get_current_state?.().is_finished?.()) return false;
+    if (finalVerificationInFlightRef.current) return false;
+
+    const handId = game.clientState.hand_id ?? HAND_ID;
+    if (protocolType(game) !== TABLE_PROTOCOL_STATE_SETTLE_HAND) {
+      transitionTableProtocol(game, TableProtocolState.settleHand({ handId }));
+    }
+    const state = settleHandState(game, handId);
+    if (state.tx && Number(state.handId) === Number(handId)) {
+      return true;
+    }
+    finalVerificationInFlightRef.current = true;
+    try {
+      const incomingSignatureShares = Array.isArray(incoming) ? incoming : incoming?.signatureShares;
+      const incomingPublicKeyShares = Array.isArray(incoming) ? null : incoming?.publicKeyShares;
+      const publicKeyShares = incomingPublicKeyShares
+        ?? game.tableAggregatePublicKeyPublicKeyShares
+        ?? [];
+      const signatureShares = incomingSignatureShares
+        ?? state.signatureShares
+        ?? game.finalVerificationSignatureShares
+        ?? [];
+      const finalVerification = buildNextFinalVerification({
+        lobbyId,
+        tableId,
+        handId,
+        hand,
+        handSetup: game.currentHandSetup,
+        handHistoryEntries: handHistoryRef.current,
+        tableSeats,
+        publicKeyShares,
+        settlement: buildFinalHandSettlement(hand, tableSeats),
+        signatureShares,
+        currentSeatNo: game.clientState.player_index,
+        signingKey: game.tableSigningKey,
+        publicKey: game.tableSignaturePublicKey,
+      });
+
+      game.finalVerificationSignatureShares = finalVerification.signatureShares;
+      game.finalVerificationDigest = finalVerification.finalHandDigest;
+      game.finalHandSettlement = finalVerification.settlementMessage;
+      transitionTableProtocol(game, TableProtocolState.settleHand({
+        handId,
+        publicKeyShares: finalVerification.publicKeyShares,
+        signatureShares: finalVerification.signatureShares,
+        digest: finalVerification.finalHandDigest,
+        settlement: finalVerification.settlementMessage,
+      }));
+      if (playerCompletedFinalSettlement(game, game.clientState.player_index)) {
+        game.finalHandSettlement = finalVerification.settlementMessage;
+      }
+
+      if (!finalVerification.signed) return false;
+
+      appendGameLog(
+        `Final verification signed by Player ${game.clientState.player_index + 1}`,
+        senderForSeat(game.clientState.player_index),
+      );
+
+      if (finalVerification.complete) {
+        const hash = await submitFinalHandOnChain({
+          lobbyId,
+          tableId,
+          handId,
+          finalVerification,
+          operatorPrivateKey: game.operatorPrivateKey,
+        });
+        game.finalVerificationSettlementTx = hash;
+        appendGameLog(`Final hand settlement submitted on-chain: ${hash}`);
+        const nextStacks = finalHandStacks(hand);
+        const playersWithChips = nextStacks.filter((chips) => Number(chips) > 0).length;
+        const isLastHand = playersWithChips <= 1;
+
+        // if (isLastHand) {
+        //   transitionTableProtocol(game, TableProtocolState.tableComplete({
+        //     handId,
+        //     settlement: finalVerification.settlementMessage,
+        //     tx: hash,
+        //   }));
+
+        // } else {
+        //   const nextHandId = Number(handId) + 1;
+        //   transitionTableProtocol(game, TableProtocolState.startHand({
+        //     handId: nextHandId,
+        //     confirmations: [],
+        //   }));
+        //   publishStartHandMessage(game, null, nextHandId);
+        // }
+        startCountdown(5, () => {
+          if (isLastHand) {
+            transitionTableProtocol(game, TableProtocolState.tableComplete({
+              handId,
+              settlement: finalVerification.settlementMessage,
+              tx: hash,
+            }));
+            const winnerIndex = settlementWinnerIndex(finalVerification.settlementMessage, tableSeats);
+            const playerIndex = game.clientState.player_index;
+            const isViewerWinner = winnerIndex === playerIndex;
+            const viewerChips = Number(fromChipUnits(
+              finalVerification.settlementMessage?.chips_balances?.[playerIndex] ?? 0
+            ));
+            setTerminalResult({
+              type: isViewerWinner ? 'win' : 'loss',
+              chips: viewerChips,
+            });
+          } else {
+            const nextHandId = Number(handId) + 1;
+            transitionTableProtocol(game, TableProtocolState.startHand({
+              handId: nextHandId,
+              confirmations: [],
+            }));
+            publishStartHandMessage(game, null, nextHandId);
+          }
+          updateView({ force: true });
+        });
+        transitionTableProtocol(game, {
+          ...game.tableProtocolState,
+          tx: hash,
+        });
+        return true;
+      }
+      publishSettleHandMessage(game, finalVerification, handId);
+      return true;
+    } catch (error) {
+      transitionTableProtocol(game, TableProtocolState.handDisputed({
+        handId,
+        reason: formatChainError(error),
+      }));
+      appendGameLog(
+        `Final verification failed: ${formatChainError(error)}`,
+        'Game',
+        'error',
+      );
+      return false;
+    } finally {
+      finalVerificationInFlightRef.current = false;
+    }
+  }, [
+    appendGameLog,
+    buildNextFinalVerification,
+    lobbyId,
+    publishSettleHandMessage,
+    publishStartHandMessage,
+    senderForSeat,
+    submitFinalHandOnChain,
+    tableId,
+    tableSeats,
+  ]);
+
   const submitProtocolAction = useCallback(async () => {
-    const game = await ensureKeys();
+    let game = await ensureKeys();
+    if (!game) return null;
+    if (!await ensureTableAggregatePublicKey(game)) return null;
+    const stateType = protocolType(game);
+    if (stateType === TABLE_PROTOCOL_STATE_HAND_DISPUTED || stateType === TABLE_PROTOCOL_STATE_TABLE_COMPLETE) {
+      updateView({ force: true });
+      return null;
+    }
+    if (stateType === TABLE_PROTOCOL_STATE_SETTLE_HAND) {
+      await submitFinalVerificationRound(game);
+      updateView({ force: true });
+      return null;
+    }
+    if (stateType === TABLE_PROTOCOL_STATE_START_HAND && !await ensureOnChainStartHand(game)) {
+      updateView({ force: true });
+      return null;
+    }
+    game = await ensureKeys(gameRef.current?.clientState?.hand_id ?? game.clientState.hand_id);
     if (!game) return null;
     const hand = game.clientState.current_hand();
     if (!hand) return null;
@@ -1345,6 +2062,7 @@ export function usePokerTable({
       if (!game.seenFinished) {
         game.seenFinished = true;
       }
+      await submitFinalVerificationRound(game);
       updateView();
       return null;
     }
@@ -1383,6 +2101,19 @@ export function usePokerTable({
       if (!built) return null;
       const wire = submitAction(built.action, built.logLines);
       if (wire && built.action.type === 'SubmitPublicKey') {
+        game.publicKeySubmissions ??= new Map();
+        game.publicKeySubmissions.set(built.action.player, {
+          publicKey: built.action.public_key,
+          traces: built.action.traces,
+        });
+        if (hand.get_current_state().current_state === POKER_HAND_STATE_FINISHED) {
+          transitionTableProtocol(game, TableProtocolState.settleHand({
+            handId: game.clientState.hand_id,
+          }));
+          if (game.clientState.player_index === 0) {
+            await submitFinalVerificationRound(game);
+          }
+        }
         game.shuffleTrace = null;
       }
       return wire;
@@ -1391,102 +2122,50 @@ export function usePokerTable({
         protocolActionInFlightRef.current = null;
       }
     }
-  }, [buildAutomaticAction, ensureKeys, submitAction, submitNop, updateView]);
+  }, [
+    buildAutomaticAction,
+    ensureKeys,
+    ensureTableAggregatePublicKey,
+    ensureOnChainStartHand,
+    submitAction,
+    submitNop,
+    submitFinalVerificationRound,
+    updateView,
+  ]);
+
+  // TODO: Do we need this?
+  // useEffect(() => {
+  //   if (snapshot.currentGameState?.tableProtocolState !== TABLE_PROTOCOL_STATE_SETTLE_HAND) return;
+  //   submitFinalVerificationRound(gameRef.current);
+  // }, [snapshot.currentGameState?.tableProtocolState, submitFinalVerificationRound]);
 
   const startNextHand = useCallback(() => {
     const game = gameRef.current;
-    const hand = game?.clientState.current_hand();
-    if (!game || !hand?.get_current_state().is_finished()) return false;
-
-    const nextStacks = finalHandStacks(hand);
-    const initialChips = nextStacks.length > 0
-      ? nextStacks
-      : Array(game.clientState.table.get_current_player_count()).fill(INITIAL_CHIPS);
-    const playerIndex = game.clientState.player_index;
-    const playerChips = Number(initialChips[playerIndex] ?? 0);
-    const playersWithChips = initialChips.filter((chips) => Number(chips) > 0).length;
-
-    if (playerChips <= 0) {
-      setTerminalResult({ type: 'lose', chips: 0 });
-      updateView({ force: true });
-      return false;
-    }
-
-    if (playersWithChips === 1) {
-      setTerminalResult({ type: 'win', chips: playerChips });
-      updateView({ force: true });
-      return false;
-    }
-
-    const smallBlind = hand.get_small_blind();
-    const dealerSeatNumber = nextDealerSeatNumber(game.clientState.table);
-
-    game.clientState.table.start_hand(initialChips, smallBlind, dealerSeatNumber);
-    game.clientState.hand_id += 1;
-    game.clientState.sequence = 0;
-    game.clientState.seen.clear();
-    game.currentHandSetup = {
-      hand_id: game.clientState.hand_id,
-      hand_number: game.clientState.hand_id,
-      initial_chips: initialChips.map((chips) => Number(chips)),
-      small_blind: smallBlind,
-      dealer_button: dealerSeatNumber,
-    };
-    game.signingKey = null;
-    game.publicKey = null;
-    game.handKeyHandId = null;
-    game.shuffleTrace = null;
-    game.seenFinished = false;
-    handHistoryRef.current = [];
-    seenHistoryTipsRef.current = new Set();
-    protocolActionInFlightRef.current = null;
-
+    if (!game || protocolType(game) !== TABLE_PROTOCOL_STATE_START_HAND) return false;
+    const handId = Number(startHandState(game).handId ?? nextOnChainHandId(game));
+    if (!startHandRoundComplete(game, handId)) return false;
+    markOnChainHandStarted(game, handId);
     const events = game.clientState.table.drain_events?.() ?? [];
     appendTraceLines(eventDisplayLines(events), game.clientState.player_index);
     updateView({ force: true });
     return true;
-  }, [appendTraceLines, updateView]);
+  }, [
+    appendTraceLines,
+    markOnChainHandStarted,
+    nextOnChainHandId,
+    startHandRoundComplete,
+    updateView,
+  ]);
 
-  const bootstrapHandFromSetup = useCallback(async (game, handSetup) => {
-    const targetHandId = Number(handSetup?.hand_number ?? handSetup?.hand_id ?? 0);
-    const numPlayers = Number(tableMaxSeats || 0);
-    if (!game || !targetHandId || !numPlayers) return false;
-    if (targetHandId <= Number(game.clientState.hand_id ?? 0)) return true;
-
-    const pokerTable = makePokerTableForHand(numPlayers, handSetup);
-    game.clientState.table = pokerTable;
-    game.clientState.hand_id = targetHandId;
-    game.clientState.sequence = 0;
-    game.clientState.seen.clear();
-    game.signingKey = null;
-    game.publicKey = null;
-    game.handKeyHandId = null;
-    game.shuffleTrace = null;
-    game.seenFinished = false;
-    game.currentHandSetup = {
-      hand_id: targetHandId,
-      hand_number: targetHandId,
-      initial_chips: [...(handSetup.initial_chips ?? [])].map((chips) => Number(chips)),
-      small_blind: Number(handSetup.small_blind ?? SMALL_BLIND),
-      dealer_button: Number(handSetup.dealer_button ?? 0),
-    };
-    handHistoryRef.current = [];
-    seenHistoryTipsRef.current = new Set();
-    protocolActionInFlightRef.current = null;
-    await ensureKeys(targetHandId);
-    updateView({ force: true });
-    return true;
-  }, [ensureKeys, tableMaxSeats, updateView]);
-
-  const advanceToHistoryHand = useCallback(async (game, targetHandId, handSetup) => {
+  const advanceToHistoryHand = useCallback(async (game, targetHandId) => {
     while (targetHandId > game.clientState.hand_id) {
       if (startNextHand()) continue;
-      return bootstrapHandFromSetup(game, handSetup);
+      return false;
     }
     return true;
-  }, [bootstrapHandFromSetup, startNextHand]);
+  }, [startNextHand]);
 
-  const applyHistoryEntries = useCallback(async (historyEntries = [], playerAddress = null, handSetup = null) => {
+  const applyHistoryEntries = useCallback(async (historyEntries = [], playerAddress = null, tokenMessage = null) => {
     const game = gameRef.current ?? resetGame();
     if (!game || !Array.isArray(historyEntries)) return true;
 
@@ -1509,7 +2188,7 @@ export function usePokerTable({
         continue;
       }
 
-      if (!await advanceToHistoryHand(game, Number(wire.hand_id), handSetup)) return true;
+      if (!await advanceToHistoryHand(game, Number(wire.hand_id))) return true;
       if (wire.hand_id !== game.clientState.hand_id) continue;
       await ensureKeys(wire.hand_id);
 
@@ -1538,6 +2217,13 @@ export function usePokerTable({
       const { applied, result } = appliedResult;
       if (applied) {
         rememberWire(wire, entry);
+        if (wire?.action?.type === 'SubmitPublicKey') {
+          game.publicKeySubmissions ??= new Map();
+          game.publicKeySubmissions.set(wire.action.player, {
+            publicKey: wire.action.public_key,
+            traces: wire.action.traces,
+          });
+        }
         const displayLines = wire.log_lines?.length > 0
           ? wire.log_lines
           : eventDisplayLines(result?.events);
@@ -1564,6 +2250,14 @@ export function usePokerTable({
     if (latestAppliedAction) {
       appendTraceLines(latestAppliedAction.displayLines, latestAppliedAction.from);
     }
+    if (game.clientState.current_hand()?.get_current_state?.().is_finished?.()) {
+      transitionTableProtocol(game, TableProtocolState.settleHand({
+        handId: game.clientState.hand_id,
+      }));
+      if (tokenRing.targetsCurrentSeat(tokenMessage)) {
+        await submitFinalVerificationRound(game);
+      }
+    }
     updateView({ force: true });
     return true;
   }, [
@@ -1574,6 +2268,8 @@ export function usePokerTable({
     ensureKeys,
     advanceToHistoryHand,
     senderForAddress,
+    submitFinalVerificationRound,
+    tokenRing,
     updateView,
     verifyHistoryEntrySignature,
   ]);
@@ -1629,32 +2325,136 @@ export function usePokerTable({
     if (
       message?.type !== HISTORY_MESSAGE
       && message?.type !== CHAT_MESSAGE
+      && message?.type !== START_HAND_MESSAGE
+      && message?.type !== TABLE_AGGREGATE_PUBLIC_KEY_MESSAGE
+      && message?.type !== SETTLE_HAND_MESSAGE
     ) return false;
+
+    const game = gameRef.current ?? resetGame();
+    if (game) tokenRing.applyCursor(game, message);
 
     if (message.type === CHAT_MESSAGE) {
       appendGameLog(message.text ?? '', senderForAddress(playerAddress));
       return true;
     }
 
-    const game = gameRef.current ?? resetGame();
     if (!game) return true;
-    const messageHandNumber = Number(message.hand_number ?? message.hand_id ?? game.clientState.hand_id);
-    await ensureKeys(messageHandNumber);
+
+    if (message.type === TABLE_AGGREGATE_PUBLIC_KEY_MESSAGE) {
+      try {
+        if (!tokenRing.targetsCurrentSeat(message)) {
+          updateView({ force: true });
+          return true;
+        }
+        const keyedGame = await ensureKeys();
+        tokenRing.applyCursor(keyedGame ?? game, message);
+        const submitted = await submitTableAggregatePublicKeyRound(
+          keyedGame ?? game,
+          {
+            publicKeyShares: message.public_key_shares ?? [],
+            signatureShares: message.signature_shares ?? [],
+          },
+        );
+        updateView({ force: true });
+        if (submitted && currentSeatNo === 0 && protocolType(keyedGame ?? game) === TABLE_PROTOCOL_STATE_START_HAND) {
+          await continueAfterPokerMessage();
+        }
+      } catch (error) {
+        appendGameLog(
+          `Table aggregate public key failed: ${formatChainError(error)}`,
+          'Game',
+          'error',
+        );
+        updateView({ force: true });
+      }
+      return true;
+    }
+
+    if (message.type === START_HAND_MESSAGE) {
+      try {
+        if (!tokenRing.targetsCurrentSeat(message)) {
+          updateView({ force: true });
+          return true;
+        }
+        const keyedGame = await ensureKeys(Number(message.hand_number ?? message.hand_id ?? HAND_ID));
+        const targetGame = keyedGame ?? game;
+        tokenRing.applyCursor(targetGame, message);
+        transitionTableProtocol(targetGame, TableProtocolState.startHand({
+          handId: Number(message.hand_number ?? message.hand_id ?? HAND_ID),
+          confirmations: message.confirmations ?? startHandState(targetGame).confirmations ?? [],
+        }));
+        if (message.seat_no != null && message.tx) {
+          recordStartHandConfirmation(
+            targetGame,
+            Number(message.seat_no),
+            Number(message.hand_number ?? message.hand_id ?? HAND_ID),
+            message.tx,
+          );
+        }
+        const complete = await ensureOnChainStartHand(targetGame);
+        if (complete && currentSeatNo === 0) {
+          await continueAfterPokerMessage();
+        }
+        updateView({ force: true });
+      } catch (error) {
+        appendGameLog(
+          `Start hand failed: ${formatChainError(error)}`,
+          'Game',
+          'error',
+        );
+        updateView({ force: true });
+      }
+      return true;
+    }
+
+    const messageHandNumber = Number(
+      message.current_hand
+      ?? message.hand_number
+      ?? message.hand_id
+      ?? game.clientState.hand_id,
+    );
+    const keyedGame = await ensureKeys(messageHandNumber);
+    const targetGame = keyedGame ?? game;
+    tokenRing.applyCursor(targetGame, message);
 
     const handHistory = Array.isArray(message.hand_history)
       ? message.hand_history
       : [];
     if (handHistory.length > 0) {
-      const appliedHistory = await applyHistoryEntries(handHistory, playerAddress, message.hand_setup);
+      const appliedHistory = await applyHistoryEntries(handHistory, playerAddress, message);
       if (!appliedHistory) return true;
     }
 
+    if (message.type === SETTLE_HAND_MESSAGE) {
+      if (!tokenRing.targetsCurrentSeat(message)) {
+        updateView({ force: true });
+        return true;
+      }
+      transitionTableProtocol(targetGame, TableProtocolState.settleHand({
+        handId: messageHandNumber,
+        publicKeyShares: message.public_key_shares ?? [],
+        signatureShares: message.signature_shares ?? [],
+        digest: message.final_hand_digest ?? null,
+        settlement: message.settlement ?? null,
+      }));
+      await submitFinalVerificationRound(targetGame, {
+        publicKeyShares: message.public_key_shares ?? [],
+        signatureShares: message.signature_shares ?? [],
+      });
+      updateView({ force: true });
+      return true;
+    }
+
     const wire = decodeWire(message.wire);
-    if (!await advanceToHistoryHand(game, Number(wire.hand_id), message.hand_setup)) return true;
+    if (!await advanceToHistoryHand(targetGame, Number(wire.hand_id))) return true;
     await ensureKeys(wire.hand_id);
 
     if (wire.nop) {
-      game.clientState.apply_nop_wire(wire);
+      targetGame.clientState.apply_nop_wire(wire);
+      if (!tokenRing.targetsCurrentSeat(message)) {
+        updateView({ force: true });
+        return true;
+      }
       return continueAfterPokerMessage({ sync: message.sync === true });
     }
 
@@ -1662,6 +2462,10 @@ export function usePokerTable({
       wireHistoryKey(entry?.wire) === wireHistoryKey(encodeWire(wire))
     ));
     if (wireAlreadyInHistory) {
+      if (!tokenRing.targetsCurrentSeat(message)) {
+        updateView({ force: true });
+        return true;
+      }
       return continueAfterPokerMessage({ sync: message.sync === true });
     }
 
@@ -1669,7 +2473,7 @@ export function usePokerTable({
     let appliedResult;
     try {
       envelope = wire.to_envelope();
-      appliedResult = game.clientState.apply_envelope_result(envelope);
+      appliedResult = targetGame.clientState.apply_envelope_result(envelope);
     } catch (error) {
       const report = cheatReportFromError(error, wire?.action?.player);
       if (report) {
@@ -1691,13 +2495,23 @@ export function usePokerTable({
         ? wire.log_lines
         : eventDisplayLines(result?.events);
       appendTraceLines(displayLines, envelope.from);
-      const hand = game.clientState.current_hand();
+      const hand = targetGame.clientState.current_hand();
       const handState = hand?.get_current_state();
       if (handState?.is_finished()) {
+        transitionTableProtocol(targetGame, TableProtocolState.settleHand({
+          handId: targetGame.clientState.hand_id,
+        }));
+        if (tokenRing.targetsCurrentSeat(message)) {
+          await submitFinalVerificationRound(targetGame);
+        }
         updateView({ force: true });
         return true;
       }
 
+      if (!tokenRing.targetsCurrentSeat(message)) {
+        updateView({ force: true });
+        return true;
+      }
       return continueAfterPokerMessage({ sync: message.sync === true });
     }
     return true;
@@ -1707,14 +2521,27 @@ export function usePokerTable({
     advanceToHistoryHand,
     applyHistoryEntries,
     continueAfterPokerMessage,
+    currentSeatNo,
+    ensureOnChainStartHand,
     ensureKeys,
+    recordStartHandConfirmation,
     resetGame,
     senderForAddress,
+    submitFinalVerificationRound,
+    submitTableAggregatePublicKeyRound,
+    tokenRing,
     updateView,
   ]);
 
   const submitBet = useCallback(async (amount) => {
-    const game = await ensureKeys();
+    let game = await ensureKeys();
+    if (!game) return;
+    if (!await ensureTableAggregatePublicKey(game)) return;
+    if (!await ensureOnChainStartHand(game)) {
+      updateView({ force: true });
+      return;
+    }
+    game = await ensureKeys(gameRef.current?.clientState?.hand_id ?? game.clientState.hand_id);
     if (!game) return;
     const hand = game.clientState.current_hand();
     const state = hand?.get_current_state();
@@ -1728,10 +2555,17 @@ export function usePokerTable({
       PokerAction.SubmitBet({ player, amount: cappedAmount }),
       [`Player ${player + 1} Bet: $${cappedAmount}`],
     );
-  }, [ensureKeys, submitAction]);
+  }, [ensureKeys, ensureOnChainStartHand, ensureTableAggregatePublicKey, submitAction, updateView]);
 
   const submitBlind = useCallback(async () => {
-    const game = await ensureKeys();
+    let game = await ensureKeys();
+    if (!game) return;
+    if (!await ensureTableAggregatePublicKey(game)) return;
+    if (!await ensureOnChainStartHand(game)) {
+      updateView({ force: true });
+      return;
+    }
+    game = await ensureKeys(gameRef.current?.clientState?.hand_id ?? game.clientState.hand_id);
     if (!game) return;
     const hand = game.clientState.current_hand();
     const state = hand?.get_current_state();
@@ -1753,7 +2587,7 @@ export function usePokerTable({
         [`Big Blind on Player ${player + 1}`],
       );
     }
-  }, [ensureKeys, submitAction]);
+  }, [ensureKeys, ensureOnChainStartHand, ensureTableAggregatePublicKey, submitAction, updateView]);
 
   const completeCheatCountdown = useCallback(() => {
     const report = cheatReportRef.current;
@@ -1771,27 +2605,100 @@ export function usePokerTable({
   }, [updateView]);
 
   useEffect(() => {
-    if (networkSnapshot?.status !== 'connected') return;
+    if (tokenRingSnapshot?.status !== 'connected') return;
     if (table?.currentSeat?.seatNo == null) return;
     ensureKeys().then(() => {
       updateView();
     });
-  }, [ensureKeys, networkSnapshot?.status, table?.currentSeat?.seatNo, updateView]);
+  }, [ensureKeys, tokenRingSnapshot?.status, table?.currentSeat?.seatNo, updateView]);
+
+  // useEffect(() => {
+  //   const connected = tokenRingSnapshot?.inboundState === 'Connected'
+  //     && tokenRingSnapshot?.outboundState === 'Connected';
+  //   const wasConnected = previousConnectedRef.current;
+  //   previousConnectedRef.current = connected;
+
+  //   if (!connected) {
+  //     if (wasConnected) pendingHistorySyncRef.current = true;
+  //     return;
+  //   }
+
+  //   if (
+  //     wasConnected
+  //     && protocolType(gameRef.current) !== TABLE_PROTOCOL_STATE_TABLE_AGGREGATE_PUBLIC_KEY
+  //   ) return;
+
+  //   ensureKeys().then(async (game) => {
+  //     if (!game) return;
+  //     if (
+  //       protocolType(game) === TABLE_PROTOCOL_STATE_TABLE_AGGREGATE_PUBLIC_KEY
+  //       && currentSeatNo !== 0
+  //     ) {
+  //       updateView({ force: true });
+  //       return;
+  //     }
+  //     if (!await ensureTableAggregatePublicKey(game)) return;
+  //     if (pendingHistorySyncRef.current) {
+  //       pendingHistorySyncRef.current = false;
+  //       sendHistorySync();
+  //       return;
+  //     }
+  //     if (currentSeatNo === 0) {
+  //       continueAfterPokerMessage();
+  //     }
+  //   }).catch((error) => {
+  //     appendGameLog(
+  //       `Table setup failed: ${formatChainError(error)}`,
+  //       'Game',
+  //       'error',
+  //     );
+  //     updateView({ force: true });
+  //   });
+  // }, [
+  //   appendGameLog,
+  //   continueAfterPokerMessage,
+  //   currentSeatNo,
+  //   ensureKeys,
+  //   ensureTableAggregatePublicKey,
+  //   tokenRingSnapshot?.inboundState,
+  //   tokenRingSnapshot?.outboundState,
+  //   sendHistorySync,
+  //   updateView,
+  // ]);
+
+  const effectInitializedRef = useRef(false);
 
   useEffect(() => {
-    const connected = networkSnapshot?.inboundState === 'Connected'
-      && networkSnapshot?.outboundState === 'Connected';
+    const connected = tokenRingSnapshot?.inboundState === 'Connected'
+      && tokenRingSnapshot?.outboundState === 'Connected';
     const wasConnected = previousConnectedRef.current;
     previousConnectedRef.current = connected;
 
     if (!connected) {
       if (wasConnected) pendingHistorySyncRef.current = true;
+      effectInitializedRef.current = false; // Reset lock if disconnected
       return;
     }
 
-    if (wasConnected) return;
+    // Prevent running repeatedly on every render if already initialized for this connection
+    if (effectInitializedRef.current) return;
+    effectInitializedRef.current = true;
 
-    ensureKeys().then(() => {
+    if (
+      wasConnected
+      && protocolType(gameRef.current) !== TABLE_PROTOCOL_STATE_TABLE_AGGREGATE_PUBLIC_KEY
+    ) return;
+
+    ensureKeys().then(async (game) => {
+      if (!game) return;
+      if (
+        protocolType(game) === TABLE_PROTOCOL_STATE_TABLE_AGGREGATE_PUBLIC_KEY
+        && currentSeatNo !== 0
+      ) {
+        updateView({ force: true });
+        return;
+      }
+      if (!await ensureTableAggregatePublicKey(game)) return;
       if (pendingHistorySyncRef.current) {
         pendingHistorySyncRef.current = false;
         sendHistorySync();
@@ -1800,14 +2707,18 @@ export function usePokerTable({
       if (currentSeatNo === 0) {
         continueAfterPokerMessage();
       }
+    }).catch((error) => {
+      appendGameLog(
+        `Table setup failed: ${formatChainError(error)}`,
+        'Game',
+        'error',
+      );
+      updateView({ force: true });
     });
   }, [
-    continueAfterPokerMessage,
     currentSeatNo,
-    ensureKeys,
-    networkSnapshot?.inboundState,
-    networkSnapshot?.outboundState,
-    sendHistorySync,
+    tokenRingSnapshot?.inboundState,
+    tokenRingSnapshot?.outboundState,
   ]);
 
   const actionBarProps = useMemo(() => {

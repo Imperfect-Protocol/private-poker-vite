@@ -99,7 +99,7 @@ export default function DebugConsole({
           const senderClassName = getMessageClassName(message);
 
           return (
-            <div key={index} className={`text-[11px] font-mono ${senderClassName}`}>
+            <div key={index} className={`text-[11px] font-mono whitespace-pre-wrap break-all ${senderClassName}`}>
               {rtcMessage ? (
                 <>
                   <span className="text-cyan-400 opacity-80">[{rtcMessage.peer}]</span>{rtcMessage.separator}{' '}

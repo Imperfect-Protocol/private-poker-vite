@@ -2,10 +2,9 @@ import { useCallback } from 'react';
 import { usePokerChips } from '@/hooks/usePokerChips';
 import { usePrivatePokerLobby } from '@/hooks/usePrivatePokerLobby';
 import { useRequireBLS } from '@/hooks/useRequireBLS';
-import { toChipUnits } from '@/lib/constants';
 
 export function useJoinTable({ onOperatorTopUp } = {}) {
-  const { joinTable } = usePrivatePokerLobby({ onOperatorTopUp });
+  const { joinTable, getTableDetail } = usePrivatePokerLobby({ onOperatorTopUp });
   const { ensureOperatorBuyInAllowance } = usePokerChips({ onOperatorTopUp });
   const { generateKeys } = useRequireBLS();
 
@@ -13,22 +12,29 @@ export function useJoinTable({ onOperatorTopUp } = {}) {
     lobbyId,
     tableId,
     tableName,
-    buyIn,
     blinds,
     stakesLabel,
     onStep,
   }) => {
+    // 1. READ BUY-IN FROM CONTRACT STATE
+    const tableDetail = await getTableDetail(lobbyId, tableId);
+    const buyIn = tableDetail.info.buyIn; // Already formatted as display units (e.g. 100)
+
+    // 2. GENERATE KEYS
     onStep?.('signature', 'active');
     const keys = await generateKeys({
       lobbyId,
       tableId,
-      tableName,
+      tableName: tableName || tableDetail.info.name,
       buyIn,
       blinds,
       stakesLabel,
     });
     onStep?.('signature', 'complete');
+
     const publicKeyBytes = `0x${keys.publicKey}`;
+
+    // 3. APPROVE EXACT ALLOWANCE (USES DERIVED BUYIN)
     onStep?.('operatorApproval', 'active');
     await ensureOperatorBuyInAllowance({
       buyIn,
@@ -36,11 +42,21 @@ export function useJoinTable({ onOperatorTopUp } = {}) {
       operatorPrivateKey: keys.operatorPrivateKey,
     });
     onStep?.('operatorApproval', 'complete');
+
+    // 4. JOIN TABLE (NO BUY-IN PARAMETER PASSED TO CONTRACT)
     onStep?.('transfer', 'active');
-    await joinTable(lobbyId, tableId, toChipUnits(buyIn), keys.playerAddress, keys.operator, publicKeyBytes, keys.operatorPrivateKey);
+    await joinTable(
+      lobbyId,
+      tableId,
+      keys.playerAddress,
+      keys.operator,
+      publicKeyBytes,
+      keys.operatorPrivateKey
+    );
     onStep?.('transfer', 'complete');
+
     return { publicKeyBytes, keys };
-  }, [ensureOperatorBuyInAllowance, generateKeys, joinTable]);
+  }, [ensureOperatorBuyInAllowance, generateKeys, getTableDetail, joinTable]);
 
   return { joinTableWithBuyIn };
 }

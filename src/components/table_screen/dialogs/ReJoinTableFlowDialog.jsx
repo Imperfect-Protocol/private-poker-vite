@@ -88,11 +88,13 @@ export default function ReJoinTableFlowDialog({
   const canPokeInbound = signatureStatus === 'active'
     && !isInboundConnected
     && !isSearchCycleActive;
-  const shownInboundStatus = isRtcConnecting || hasRtcConnecting
-    ? 'Connecting'
-    : isSearchCycleActive
-      ? 'Searching'
-      : inboundStatus;
+  const shownInboundStatus = isInboundConnected
+    ? 'connected'
+    : isRtcConnecting || hasRtcConnecting
+      ? 'Connecting'
+      : isSearchCycleActive
+        ? 'Searching'
+        : inboundStatus;
   const isComplete = signatureStatus === 'active'
     && inboundStatus === 'connected'
     && outboundStatus === 'peer subscribed';

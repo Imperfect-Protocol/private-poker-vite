@@ -5,6 +5,8 @@ const RTC_POOL_SIGNAL = 'RTC_POOL_SIGNAL';
 const RTC_POOL_ROUTE_REQUEST = 'RTC_POOL_ROUTE_REQUEST';
 const RTC_POOL_ROUTE_RESULT = 'RTC_POOL_ROUTE_RESULT';
 const RTC_POOL_LOCAL_NOTICE = 'RTC_POOL_LOCAL_NOTICE';
+const RTC_POOL_GOSSIP_ANNOUNCE = 'RTC_POOL_GOSSIP_ANNOUNCE';
+const RTC_POOL_GOSSIP_TRIGGER_OFFER = 'RTC_POOL_GOSSIP_TRIGGER_OFFER';
 const RTC_POOL_BROADCAST_CHANNEL = 'private-poker:rtc-session-pool';
 const DEFAULT_TTL = 6;
 const MAX_SEEN_MESSAGES = 500;
@@ -339,6 +341,7 @@ class RtcSessionPool {
     this.knownPeers = new Map();
     this.silentEndpoints = new Map();
     this.seenMessages = new Set();
+    this.seenGossipMessages = new Map();
     this.pendingDeliveries = new Map();
     this.pendingRoutes = new Map();
     this.seenRouteRequests = new Set();
@@ -599,6 +602,11 @@ class RtcSessionPool {
       return;
     }
 
+    if (message?.type === RTC_POOL_GOSSIP_ANNOUNCE || message?.type === RTC_POOL_GOSSIP_TRIGGER_OFFER) {
+      await this.handleGossipControlMessage(message);
+      return;
+    }
+
     if (message?.type === RTC_POOL_ROUTE_REQUEST) {
       await this.handleRouteRequest(message);
       return;
@@ -667,6 +675,11 @@ class RtcSessionPool {
         return;
       }
       await this.deliverOrScatter(signal);
+      return;
+    }
+
+    if (message.type === RTC_POOL_GOSSIP_ANNOUNCE || message.type === RTC_POOL_GOSSIP_TRIGGER_OFFER) {
+      await this.handleGossipControlMessage(message);
       return;
     }
 
@@ -949,6 +962,22 @@ class RtcSessionPool {
     return true;
   }
 
+  rememberGossip(message) {
+    const id = message?.id;
+    if (!id) return false;
+
+    const ttl = Number(message.ttl ?? 0);
+    const previousTtl = this.seenGossipMessages.get(id);
+    if (previousTtl !== undefined && previousTtl >= ttl) return false;
+
+    this.seenGossipMessages.set(id, ttl);
+    if (this.seenGossipMessages.size > MAX_SEEN_MESSAGES) {
+      const [oldest] = this.seenGossipMessages.keys();
+      this.seenGossipMessages.delete(oldest);
+    }
+    return true;
+  }
+
   waitForDelivery(messageId, timeoutMs = DELIVERY_TIMEOUT_MS) {
     if (!messageId) return Promise.resolve(false);
 
@@ -1103,6 +1132,169 @@ class RtcSessionPool {
   dispatchLocalLobbyNotice(type, detail) {
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new CustomEvent(type, { detail }));
+  }
+
+  createGossipControlMessage({
+    type,
+    originAddress,
+    targetAddress,
+    lobbyId,
+    tableId,
+    triggerTargetAddress = null,
+  }) {
+    return {
+      type,
+      id: makeMessageId(type, targetAddress, lobbyId, tableId),
+      originAddress,
+      targetAddress,
+      triggerTargetAddress,
+      lobbyId: String(lobbyId),
+      tableId: String(tableId),
+      ttl: DEFAULT_TTL,
+      visited: [normalizeAddress(originAddress)],
+    };
+  }
+
+  sendGossipAnnounce({
+    originAddress,
+    targetAddress,
+    lobbyId,
+    tableId,
+  }) {
+    const message = this.createGossipControlMessage({
+      type: RTC_POOL_GOSSIP_ANNOUNCE,
+      originAddress,
+      targetAddress,
+      lobbyId,
+      tableId,
+    });
+
+    logPool('gossip announce start', {
+      messageId: message.id,
+      from: formatPeer(originAddress),
+      to: formatPeer(targetAddress),
+      lobbyId,
+      tableId,
+    });
+
+    return this.forwardGossipControl(message);
+  }
+
+  sendGossipTriggerOffer({
+    originAddress,
+    targetAddress,
+    triggerTargetAddress,
+    lobbyId,
+    tableId,
+  }) {
+    const message = this.createGossipControlMessage({
+      type: RTC_POOL_GOSSIP_TRIGGER_OFFER,
+      originAddress,
+      targetAddress,
+      triggerTargetAddress,
+      lobbyId,
+      tableId,
+    });
+
+    logPool('gossip trigger-offer start', {
+      messageId: message.id,
+      from: formatPeer(originAddress),
+      to: formatPeer(targetAddress),
+      triggerTarget: formatPeer(triggerTargetAddress),
+      lobbyId,
+      tableId,
+    });
+
+    return this.forwardGossipControl(message);
+  }
+
+  getLocalTableSession(playerAddress, lobbyId, tableId) {
+    return this.sessions.get(sessionKey({
+      playerAddress,
+      lobbyId,
+      tableId,
+      endpoint: ENDPOINT.TABLE,
+    }));
+  }
+
+  async deliverGossipControl(message) {
+    const targetSession = this.getLocalTableSession(
+      message.targetAddress,
+      message.lobbyId,
+      message.tableId,
+    );
+    if (!targetSession) return false;
+
+    logPool('gossip control reached target', {
+      messageId: message.id,
+      type: message.type,
+      target: formatPeer(message.targetAddress),
+      origin: formatPeer(message.originAddress),
+    });
+
+    if (message.type === RTC_POOL_GOSSIP_ANNOUNCE) {
+      await targetSession.handleGossipAnnounce?.(message);
+      return true;
+    }
+
+    if (message.type === RTC_POOL_GOSSIP_TRIGGER_OFFER) {
+      await targetSession.handleGossipTriggerOffer?.(message);
+      return true;
+    }
+
+    return false;
+  }
+
+  forwardGossipControl(message, { fromPeerAddress = null } = {}) {
+    if (!this.rememberGossip(message)) {
+      logPool('gossip control ignored, already seen with equal/better ttl', {
+        messageId: message?.id,
+        type: message?.type,
+        ttl: message?.ttl,
+      });
+      return false;
+    }
+
+    const localKeys = [...this.sessions.values()]
+      .map((session) => normalizeAddress(session.config?.playerAddress ?? session.localSession?.playerAddress))
+      .filter(Boolean);
+    const visited = [...new Set([...(message.visited ?? []), ...localKeys].filter(Boolean))];
+
+    if (this.getLocalTableSession(message.targetAddress, message.lobbyId, message.tableId)) {
+      void Promise.resolve(this.deliverGossipControl(message)).catch((error) => {
+        logPool('gossip local delivery failed', error);
+      });
+      return true;
+    }
+
+    const ttl = Number(message.ttl ?? 0);
+    if (ttl <= 0) return true;
+
+    const nextMessage = {
+      ...message,
+      ttl: ttl - 1,
+      visited,
+    };
+
+    const sentToLinks = this.scatter(nextMessage, { excludePeerAddress: fromPeerAddress });
+    const sentToBroadcast = this.postBroadcast(nextMessage);
+    const sentToWorker = this.postWorker(nextMessage);
+
+    logPool('gossip control forwarded', {
+      messageId: message.id,
+      type: message.type,
+      target: formatPeer(message.targetAddress),
+      sentToLinks,
+      sentToBroadcast,
+      sentToWorker,
+      ttl: nextMessage.ttl,
+    });
+
+    return sentToLinks || sentToBroadcast || sentToWorker;
+  }
+
+  async handleGossipControlMessage(message, { fromPeerAddress = null } = {}) {
+    this.forwardGossipControl(message, { fromPeerAddress });
   }
 
   async handleRouteRequest(message) {
@@ -1429,6 +1621,19 @@ class RtcSessionPool {
   }
 
   async handleMessage(receiverSession, fromPeerAddress, message) {
+    if (message?.type === RTC_POOL_GOSSIP_ANNOUNCE || message?.type === RTC_POOL_GOSSIP_TRIGGER_OFFER) {
+      logPool('data-channel gossip control received', {
+        messageId: message.id,
+        type: message.type,
+        receiver: formatPeer(receiverSession.config?.playerAddress),
+        fromPeer: formatPeer(fromPeerAddress),
+        target: formatPeer(message.targetAddress),
+        ttl: message.ttl,
+      });
+      await this.handleGossipControlMessage(message, { fromPeerAddress });
+      return true;
+    }
+
     if (message?.type === RTC_POOL_ROUTE_RESULT) {
       logPool('data-channel route result received', {
         requestId: message.requestId,
@@ -1515,9 +1720,14 @@ class RtcSessionPool {
   async handleSilentDataMessage(receiverSession, fromPeerAddress, rawData) {
     try {
       const message = JSON.parse(rawData);
-      if (message?.type === RTC_POOL_SIGNAL) {
+      if (
+        message?.type === RTC_POOL_SIGNAL
+        || message?.type === RTC_POOL_GOSSIP_ANNOUNCE
+        || message?.type === RTC_POOL_GOSSIP_TRIGGER_OFFER
+      ) {
         logPool('silent data message parsed', {
           signalId: message.id,
+          type: message.type,
           fromPeer: formatPeer(fromPeerAddress),
           target: formatPeer(message.targetAddress),
         });
@@ -1539,4 +1749,9 @@ class RtcSessionPool {
 }
 
 export const rtcSessionPool = new RtcSessionPool();
-export { RTC_POOL_SIGNAL, ENDPOINT };
+export {
+  RTC_POOL_SIGNAL,
+  RTC_POOL_GOSSIP_ANNOUNCE,
+  RTC_POOL_GOSSIP_TRIGGER_OFFER,
+  ENDPOINT,
+};

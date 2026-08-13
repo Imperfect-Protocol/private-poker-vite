@@ -1,17 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAccountSession } from '@/contexts/AccountSessionContext.jsx';
 import { usePrivatePokerLobby } from '@/hooks/usePrivatePokerLobby';
-import { useNetwork } from '@/hooks/useNetwork';
+import { useTokenRing } from '@/hooks/useTokenRing.js';
 import { CHAIN_POLLING_INTERVAL } from '@/lib/chain';
+import { getBlindsForBuyin, getStakesLabel } from '@/lib/stakes';
 
 const mapTableDetail = (detail) => ({
   id: detail.info.id,
   name: detail.info.name,
   gameType: detail.info.gameType ?? 1,
   buyin: detail.info.buyIn,
+  blinds: getBlindsForBuyin(detail.info.buyIn),
+  stakes: getStakesLabel(detail.info.buyIn),
   maxSeats: detail.info.flags,
+  currentHand: Number(detail.info.currentHand ?? 0),
   players: detail.players,
-  current_hand: { min_bet: 10, max_bet: 100, bet_step: 10, community_cards: '' },
+  current_hand: {
+    min_bet: undefined,
+    max_bet: undefined,
+    bet_step: undefined,
+    community_cards: '',
+  },
 });
 
 const buildSeats = (tableData) => {
@@ -23,6 +32,7 @@ const buildSeats = (tableData) => {
       playerAddress: player?.playerAddress ?? null,
       operator: player?.operator ?? null,
       announcePublicKey: player?.annoncePublicKey ?? null,
+      signaturePublicKey: player?.annoncePublicKey ?? null,
     };
   });
 };
@@ -35,6 +45,7 @@ const makeSeatsKey = (seats) => seats
     normalizeAddress(seat.playerAddress),
     normalizeAddress(seat.operator),
     seat.announcePublicKey ?? '',
+    seat.signaturePublicKey ?? '',
   ].join('/'))
   .join('|');
 
@@ -72,26 +83,35 @@ export function useTable({
     tableId: activeTableId,
     tableName,
     buyIn: liveTableData?.buyin,
+    currentHand: liveTableData?.currentHand,
     blinds: liveTableData?.blinds,
     stakesLabel: liveTableData?.stakes,
-  }), [activeTableId, lobbyId, liveTableData?.blinds, liveTableData?.buyin, liveTableData?.stakes, tableName]);
+  }), [activeTableId, lobbyId, liveTableData?.blinds, liveTableData?.buyin, liveTableData?.currentHand, liveTableData?.stakes, tableName]);
   const subscribedPrecedingPeerKeyRef = useRef(null);
+  const mySeatNo = useMemo(() => (
+    seats.find((seat) => normalizeAddress(seat.playerAddress) === normalizeAddress(playerAddress))?.seatNo ?? null
+  ), [playerAddress, seats]);
 
   const onSeat = useCallback((seatNo, seatEvent) => {
     onSeatEventRef.current?.(seatNo, seatEvent);
   }, []);
 
-  const network = useNetwork({
-    tableId: activeTableId,
-    lobbyId,
-    tableDetails: tableSessionDetails,
-    seats,
-    onActivity,
-    onOperatorTopUp,
-    isTableFull,
-    tableCapacity,
-    localMediaStream,
+  const tokenRing = useTokenRing({
+    currentSeatNo: mySeatNo,
+    seatCount: tableCapacity,
+    network: {
+      tableId: activeTableId,
+      lobbyId,
+      tableDetails: tableSessionDetails,
+      seats,
+      onActivity,
+      onOperatorTopUp,
+      isTableFull,
+      tableCapacity,
+      localMediaStream,
+    },
   });
+
   const [
     publishMessage,
     subscribeTo,
@@ -102,10 +122,7 @@ export function useTable({
     armDuplicateNextMessage,
     prepareHandSession,
     pokeInboundConnection,
-  ] = network;
-  const mySeatNo = useMemo(() => (
-    seats.find((seat) => normalizeAddress(seat.playerAddress) === normalizeAddress(playerAddress))?.seatNo ?? null
-  ), [playerAddress, seatsKey]);
+  ] = tokenRing;
 
   const previousSeat = useMemo(() => {
     if (mySeatNo === null) return null;
@@ -117,7 +134,8 @@ export function useTable({
     if (myOccupiedSeatIndex < 0) return null;
 
     return occupiedSeats[(myOccupiedSeatIndex - 1 + occupiedSeats.length) % occupiedSeats.length];
-  }, [mySeatNo, seatsKey]);
+  }, [mySeatNo, seats]);
+
   const previousSeatNo = previousSeat?.seatNo ?? null;
   const subscriptionKey = [
     normalizeAddress(playerAddress),
@@ -143,25 +161,14 @@ export function useTable({
 
   const retryInboundConnection = useCallback(async () => {
     if (!previousSeat?.playerAddress) {
-      console.log('[RTC UI] Poke ignored: no previous seat');
       throw new Error('No previous peer seat is available to poke.');
     }
 
     const { playerAddress: peerPlayerAddress, announcePublicKey } = previousSeat;
     if (!announcePublicKey) {
-      console.log('[RTC UI] Poke ignored: previous seat has no announce key', {
-        peer: peerPlayerAddress,
-        lobbyId,
-        tableId: activeTableId,
-      });
       throw new Error('Previous peer is missing an announce key.');
     }
 
-    console.log('[RTC UI] Poke inbound', {
-      peer: peerPlayerAddress,
-      lobbyId,
-      tableId: activeTableId,
-    });
     await pokeInboundConnection(peerPlayerAddress, announcePublicKey, (seatNo, event) => {
       onSeat(seatNo, {
         kind: 'network',
@@ -169,7 +176,7 @@ export function useTable({
         event,
       });
     });
-  }, [activeTableId, lobbyId, onSeat, pokeInboundConnection, previousSeat]);
+  }, [onSeat, pokeInboundConnection, previousSeat]);
 
   useEffect(() => {
     if (!networkEnabled) return;
@@ -253,21 +260,45 @@ export function useTable({
     isSeated: isSeated === true,
   }), [playerAddress, isSeated, mySeatNo]);
 
-  const result = [activeTableId, tableName, lobbyId, liveTableData?.gameType ?? 1, seats, onSeat];
-  return Object.assign(result, {
+  return useMemo(() => {
+    const result = [activeTableId, tableName, lobbyId, liveTableData?.gameType ?? 1, seats, onSeat];
+    return Object.assign(result, {
+      onSeat,
+      currentSeat,
+      tableData: liveTableData,
+      setTableData: setLiveTableData,
+      isLoading,
+      isSeated,
+      setIsSeated,
+      refresh: () => setRefreshTrigger((current) => current + 1),
+      hasJoinedTable: isSeated === true,
+      network: tokenRing,
+      tokenRing,
+      networkSnapshot,
+      lobbyId,
+      playerNetworkStates: networkSnapshot?.peerStates ?? {},
+      prepareNetworkSession,
+      prepareHandSession,
+      publishMessage,
+      armBadSignatureOnce,
+      armDropNextMessage,
+      armDuplicateNextMessage,
+      retryInboundConnection,
+      seats,
+      subscribeTo,
+    });
+  }, [
+    activeTableId,
+    tableName,
+    lobbyId,
+    liveTableData,
+    seats,
     onSeat,
     currentSeat,
-    tableData: liveTableData,
-    setTableData: setLiveTableData,
     isLoading,
     isSeated,
-    setIsSeated,
-    refresh: () => setRefreshTrigger((current) => current + 1),
-    hasJoinedTable: isSeated === true,
-    network,
+    tokenRing,
     networkSnapshot,
-    lobbyId,
-    playerNetworkStates: networkSnapshot?.peerStates ?? {},
     prepareNetworkSession,
     prepareHandSession,
     publishMessage,
@@ -275,7 +306,6 @@ export function useTable({
     armDropNextMessage,
     armDuplicateNextMessage,
     retryInboundConnection,
-    seats,
     subscribeTo,
-  });
+  ]);
 }

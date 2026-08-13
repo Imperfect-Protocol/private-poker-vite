@@ -96,7 +96,7 @@ export function useLobby(lobbyId = undefined) {
             name: tableData.name,
             buyin: tableData.buyIn,
             game: getGameTypeName(lobbyData.gameType),
-            blinds: getBlindsForBuyin(tableData.buyIn),
+            blinds: getBlindsForBuyin(tableData.buyIn).label,
             max_players: tableData.flags,
             current_players: tableData.playerCount,
             state: 'seating',

@@ -2,9 +2,9 @@ import { bls12_381 } from '@noble/curves/bls12-381';
 import { keccak_256 } from '@noble/hashes/sha3';
 
 function padDigestTo64(digest) {
-  const out = new Uint8Array(64);
-  out.set(digest, 0);
-  return out;
+  const output = new Uint8Array(64);
+  output.set(digest, 0);
+  return output;
 }
 
 function keccak256PaddedTo64(message) {

@@ -6,6 +6,14 @@ export function sign(data, k) {
   return hash_to_curve(data).multiply(normalizeSigningKey(k));
 }
 
+export function digest_to_g1(digest) {
+  return hash_to_curve(digest);
+}
+
+export function sign_digest(digest, k) {
+  return digest_to_g1(digest).multiply(normalizeSigningKey(k));
+}
+
 export function mask(g1, k) {
   return g1.multiply(normalizeSigningKey(k));
 }

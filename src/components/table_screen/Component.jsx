@@ -1,4 +1,4 @@
-import { Children, useEffect, useRef, useState } from 'react';
+import { Children, useEffect, useRef, useState, useMemo } from 'react';
 import PlayerActionBar from '@/components/table_screen/player_action_bar/Component';
 import Background from '@/components/table_screen/Background';
 import CommunityCards from '@/components/table_screen/CommunityCards';
@@ -89,9 +89,12 @@ export default function TableScreen({
   children,
 }) {
   const hasDimOverlay = Children.toArray(children).length > 0;
-  const communityCards = parseCards(tableData?.current_hand?.community_cards);
+  const communityCards = useMemo(
+    () => parseCards(tableData?.current_hand?.community_cards),
+    [tableData?.current_hand?.community_cards]
+  );
   const showResult = Boolean(gameState?.resultText);
-  const showNextHandCountdown = showResult && Boolean(gameState?.canStartNextHand);
+  const showNextHandCountdown = false;
   const isCheatResult = Boolean(gameState?.cheat);
   const winnerAddress = gameState?.resultWinner == null
     ? null
@@ -151,15 +154,15 @@ export default function TableScreen({
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
             <div className="grid grid-cols-[10rem_22rem] items-center gap-4">
               <div className="text-center group pointer-events-auto">
-              <div className="bg-[#080d16]/95 border-2 border-[#435064]/85 px-8 py-3 rounded-2xl backdrop-blur-xl shadow-[0_10px_24px_rgba(0,0,0,0.3),inset_0_0_18px_rgba(96,116,145,0.14)]">
-                <p className="text-[10px] text-[#94a3b8] font-mono tracking-widest uppercase mb-1">Current Pot</p>
-                <div className="flex items-center justify-center gap-2 text-white">
-                  <Coins size={28} className="text-yellow-200 drop-shadow-[0_0_10px_rgba(250,204,21,0.35)]" />
-                  <p className="text-3xl font-black font-mono tracking-tighter italic">
-                    {tableData?.current_hand?.current_pot || tableData?.total_buyin || "0"}
-                  </p>
+                <div className="bg-[#080d16]/95 border-2 border-[#435064]/85 px-8 py-3 rounded-2xl backdrop-blur-xl shadow-[0_10px_24px_rgba(0,0,0,0.3),inset_0_0_18px_rgba(96,116,145,0.14)]">
+                  <p className="text-[10px] text-[#94a3b8] font-mono tracking-widest uppercase mb-1">Current Pot</p>
+                  <div className="flex items-center justify-center gap-2 text-white">
+                    <Coins size={28} className="text-yellow-200 drop-shadow-[0_0_10px_rgba(250,204,21,0.35)]" />
+                    <p className="text-3xl font-black font-mono tracking-tighter italic">
+                      {tableData?.current_hand?.current_pot || tableData?.total_buyin || "0"}
+                    </p>
+                  </div>
                 </div>
-              </div>
               </div>
               <CommunityCards cards={communityCards} />
             </div>

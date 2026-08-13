@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAccountSession } from '@/contexts/AccountSessionContext.jsx';
 import { useActionQueue } from '@/hooks/useActionQueue';
-import { useListenForSignals, usePrivatePokerSignal } from '@/hooks/usePrivatePokerSignal';
+import { usePrivatePokerSignal } from '@/hooks/usePrivatePokerSignal';
 import { useRequireBLS } from '@/hooks/useRequireBLS';
 import { useRtcSessionPool } from '@/hooks/useRtcSessionPool';
 import { PokerRtcSession } from '@/lib/PokerRtcSession';
@@ -55,7 +55,6 @@ export function useNetwork({
   tableDetails,
   seats = [],
   onActivity,
-  onOperatorTopUp,
   isTableFull = false,
   tableCapacity = 0,
   localMediaStream = null,
@@ -77,6 +76,7 @@ export function useNetwork({
     lobbyId,
     tableId,
   }), [lobbyId, playerAddress, tableId]);
+
   const players = useMemo(
     () => seats
       .filter((seat) => seat?.playerAddress)
@@ -98,6 +98,7 @@ export function useNetwork({
       blsKeysRef.current = blsKeys;
     }
   }, [blsKeys]);
+
   const [session] = useState(
     () => new PokerRtcSession({
       sendSignal: () => {},
@@ -107,15 +108,9 @@ export function useNetwork({
     }),
   );
   const [networkSnapshot, setNetworkSnapshot] = useState(() => session.getSnapshot());
+
   const sendPooledSignal = useCallback(async (payload) => {
-    console.log('[RTC route] table asks lobby for silent route', {
-      from: payload.originAddress,
-      to: payload.targetAddress,
-      lobbyId: payload.lobbyId,
-      tableId: payload.tableId,
-    });
     const route = await rtcSessionPool.requestLobbyRoute(payload);
-    console.log(`[RTC route] lobby route ${route.found ? 'found' : 'not found'}`, route);
     return route;
   }, [rtcSessionPool]);
 
@@ -136,6 +131,7 @@ export function useNetwork({
       operator: keys.operator,
       tableId,
       lobbyId,
+      currentHand: tableDetails?.currentHand,
       publicKey: keys.publicKey,
       privateKey: keys.privateKey,
       operatorPrivateKey: keys.operatorPrivateKey,
@@ -179,7 +175,6 @@ export function useNetwork({
 
     if (!loggedUpdateKeysRef.current.has(sessionConfigKey)) {
       loggedUpdateKeysRef.current.add(sessionConfigKey);
-      console.log('session.update()');
     }
 
     session.setCallbacks({
@@ -195,6 +190,7 @@ export function useNetwork({
       operator,
       tableId,
       lobbyId,
+      currentHand: tableDetails?.currentHand,
       publicKey,
       privateKey,
       operatorPrivateKey,
@@ -221,23 +217,15 @@ export function useNetwork({
     sendSignal,
     session,
     tableCapacity,
+    tableDetails?.currentHand,
     tableId,
   ]);
 
-  useListenForSignals(playerAddress, lobbyId, tableId, async (signalData) => {
-    console.log('handleSignal', signalData);
-    await controlActions.enqueueAction('RTC signal', async () => {
-      await session.handleSignal(signalData);
-    }, { dependsOn: [blsActionKey] });
-  });
-
   useEffect(() => () => {
-    console.log('session.destroy()');
     session.destroy();
   }, [session]);
 
   const publishMessage = useCallback((message) => {
-    console.log('session.publishMessage()', message);
     session.publishMessage(message);
   }, [session]);
 
@@ -257,29 +245,11 @@ export function useNetwork({
     await controlActions.enqueueAction('RTC offer', async () => {
       await session.subscribeTo(peerPlayerAddress, peerAnnouncePubKey, callback, options);
     }, { dependsOn: [blsActionKey] });
-  }, [
-    blsActionKey,
-    controlActions,
-    session,
-  ]);
+  }, [blsActionKey, controlActions, session]);
 
   const pokeInboundConnection = useCallback(async (peerPlayerAddress, peerAnnouncePubKey, callback) => {
-    console.log('[RTC signal] Poke immediate start', {
-      peer: peerPlayerAddress,
-      lobbyId,
-      tableId,
-    });
     await session.pokeInboundConnection(peerPlayerAddress, peerAnnouncePubKey, callback);
-    console.log('[RTC signal] Poke immediate done', {
-      peer: peerPlayerAddress,
-      lobbyId,
-      tableId,
-    });
-  }, [
-    lobbyId,
-    session,
-    tableId,
-  ]);
+  }, [session]);
 
   const prepareNetworkSession = useCallback(async () => {
     return controlActions.enqueueAction(
@@ -287,11 +257,7 @@ export function useNetwork({
       prepareNetworkSessionNow,
       { key: blsActionKey, cacheable: true },
     );
-  }, [
-    blsActionKey,
-    controlActions,
-    prepareNetworkSessionNow,
-  ]);
+  }, [blsActionKey, controlActions, prepareNetworkSessionNow]);
 
   const prepareHandSession = useCallback(async (handNumber) => {
     return generateHandKeys(handNumber, tableDetails);

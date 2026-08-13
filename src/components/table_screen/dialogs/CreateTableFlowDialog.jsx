@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import FlowStepDialog from '@/components/table_screen/dialogs/FlowStepDialog';
 import { useCreateTable } from '@/hooks/useCreateTable';
+import { formatChainError } from '@/lib/chain/errors';
 
 const initialSteps = {
   signature: 'pending',
@@ -34,7 +35,7 @@ export default function CreateTableFlowDialog({ request, onComplete, onOperatorT
         setIsComplete(true);
       } catch (err) {
         console.error(err);
-        setError(err.shortMessage || err.details || err.message || 'Transaction failed or was rejected.');
+        setError(formatChainError(err, 'Transaction failed or was rejected.'));
         setSteps((current) => {
           const next = { ...current };
           const activeStep = Object.entries(next).find(([, status]) => status === 'active')?.[0];

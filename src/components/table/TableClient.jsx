@@ -50,6 +50,15 @@ const rtcMessageLabels = (message) => {
     }
     return [submitConsoleLine(lastHistoryEntry?.wire?.submit ?? message.wire?.submit) ?? 'History'];
   }
+  if (message.type === 'SettleHand') {
+    return [`Final settlement signatures: ${message.signer_seats?.length ?? message.signature_shares?.length ?? 0}`];
+  }
+  if (message.type === 'StartHand') {
+    return [`Start hand on-chain confirmed by Player ${Number(message.seat_no ?? 0) + 1}`];
+  }
+  if (message.type === 'TableAggregatePublicKey') {
+    return [`Table aggregate public key signatures: ${message.signer_seats?.length ?? message.signature_shares?.length ?? 0}`];
+  }
   return [message.type];
 };
 
@@ -62,6 +71,7 @@ const POKER_PROTOCOL_UI_STATES = new Set([
   'UnmaskRiver',
   'UnmaskShowdown',
   'SubmitPublicKey',
+  'FinalSettlement',
   'Finished',
   'PreFlop',
   'Flop',
@@ -117,6 +127,9 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
     if (
       incoming?.type === 'History'
       || incoming?.type === 'ChatMessage'
+      || incoming?.type === 'StartHand'
+      || incoming?.type === 'TableAggregatePublicKey'
+      || incoming?.type === 'SettleHand'
     ) {
       pokerTableRef.current?.handleNetworkMessage(incoming, playerAddress);
       return;
@@ -161,10 +174,7 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
 
   const [pokerTableState, pokerTableActions] = usePokerTable({
     table,
-    networkSnapshot: table.networkSnapshot,
-    publishMessage: table.publishMessage,
-    prepareNetworkSession: table.prepareNetworkSession,
-    prepareHandSession: table.prepareHandSession,
+    onOperatorTopUp: handleOperatorTopUp,
   });
   const playerAddresses = useMemo(() => (
     table.tableData?.players?.map((player) => player.playerAddress).filter(Boolean) ?? []
@@ -238,16 +248,26 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
     const actionKey = [
       protocolActionState.state,
       protocolActionState.seat,
-      currentGameState.pot,
-      currentGameState.minBet,
-      currentGameState.maxBet,
-      currentGameState.step,
+      currentGameState?.pot,
+      currentGameState?.minBet,
+      currentGameState?.maxBet,
+      currentGameState?.step,
     ].join(':');
     if (lastProtocolActionKeyRef.current === actionKey) return;
     lastProtocolActionKeyRef.current = actionKey;
 
     submitProtocolAction();
-  }, [currentGameState, protocolActionState, submitProtocolAction, table.currentSeat?.seatNo]);
+  }, [
+    currentGameState?.state,
+    currentGameState?.pot,
+    currentGameState?.minBet,
+    currentGameState?.maxBet,
+    currentGameState?.step,
+    protocolActionState?.state,
+    protocolActionState?.seat,
+    submitProtocolAction,
+    table.currentSeat?.seatNo,
+  ]);
 
   useEffect(() => {
     tableRef.current = table;
@@ -308,7 +328,7 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
   if (table.isLoading || !table.tableData) {
     return (
       <main className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div/>
+        <div />
       </main>
     );
   }

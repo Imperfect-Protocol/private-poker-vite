@@ -3,6 +3,7 @@ import { CHIPS_CONTRACT_ADDRESS, LOBBY_CONTRACT_ADDRESS } from '@/lib/chain';
 import { toChipUnits } from '@/lib/constants';
 import { useOperatorAddress } from '@/hooks/useOperatorAddress';
 import { publicPokerClient } from '@/lib/publicPokerClient';
+import { logWriteTransactionError, waitForLoggedTransactionReceipt } from '@/lib/tx_console';
 
 const CHIPS_ABI = parseAbi([
   "function balanceOf(address account) view returns (uint256)",
@@ -47,14 +48,33 @@ export function usePokerChips({ onOperatorTopUp } = {}) {
     }
     if (allowance >= amount) return;
 
-    const hash = await writeContractFromOperator({
-      operatorPrivateKey,
-      contract: CHIPS_CONTRACT_ADDRESS,
-      abi: CHIPS_ABI,
-      functionName: 'approve',
-      args: [LOBBY_CONTRACT_ADDRESS, amount],
-    });
-    await publicPokerClient.waitForTransactionReceipt({ hash });
+    const args = [LOBBY_CONTRACT_ADDRESS, amount];
+    let hash;
+    try {
+      hash = await writeContractFromOperator({
+        operatorPrivateKey,
+        contract: CHIPS_CONTRACT_ADDRESS,
+        abi: CHIPS_ABI,
+        functionName: 'approve',
+        args,
+      });
+      await waitForLoggedTransactionReceipt({
+        hash,
+        functionName: 'approve',
+        contract: CHIPS_CONTRACT_ADDRESS,
+        args,
+      });
+    } catch (error) {
+      if (!hash) {
+        logWriteTransactionError({
+          functionName: 'approve',
+          contract: CHIPS_CONTRACT_ADDRESS,
+          args,
+          error,
+        });
+      }
+      throw error;
+    }
   };
 
   return { ensureOperatorBuyInAllowance };
