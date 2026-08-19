@@ -47,8 +47,8 @@ const PRIVATE_POKER_ABI = parseAbi([
   'function getLobbyById(uint256 lobbyId) view returns (bytes)',
   'function balanceOf(address account) view returns (uint256)',
   'function approve(address spender, uint256 value) returns (bool)',
-  'function subscribe(address player_address, address operator, bytes annonce_public_key, bytes encrypted_profile, uint8 subscription_tier)',
-  'function createAccount(address player_address)',
+  'function subscribe(address player_address, address operator, string display_name, bytes annonce_public_key, bytes encrypted_profile, uint8 subscription_tier)',
+  'function createAccount(address player_address, string display_name, bytes encrypted_profile)',
   'function setAccountStatus(address player_address, uint256 flags)',
   'function getAccountStatus(address player_address) view returns (uint256)',
   'function createTable(uint256 lobby_id, uint256 table_id, string calldata name, uint256 buy_in, uint256 num_players, address player_address, bytes calldata annonce_public_key)',
@@ -182,6 +182,7 @@ async function ensurePlayerGas({ publicClient, walletClient, owner, player }) {
 }
 
 async function preparePlayer({ publicClient, walletClient, owner, account, announcePublicKey }) {
+  const displayName = `Player ${account.address.slice(2, 6)}`;
   const accountStatus = await publicClient.readContract({
     address: PRIVATE_POKER_CONTRACT_ADDRESS,
     abi: PRIVATE_POKER_ABI,
@@ -194,7 +195,7 @@ async function preparePlayer({ publicClient, walletClient, owner, account, annou
       walletClient,
       account: owner,
       functionName: 'createAccount',
-      args: [account.address],
+      args: [account.address, displayName, '0x'],
     });
   }
   if (accountStatus !== ACCOUNT_STATUS_VERIFIED) {
@@ -231,7 +232,7 @@ async function preparePlayer({ publicClient, walletClient, owner, account, annou
     walletClient,
     account,
     functionName: 'subscribe',
-    args: [account.address, account.address, announcePublicKey, '0x', 1],
+    args: [account.address, account.address, displayName, announcePublicKey, '0x', 1],
   });
   await writeAndWait({
     publicClient,

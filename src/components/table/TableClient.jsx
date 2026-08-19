@@ -13,6 +13,7 @@ import TopUpOperatorGasDialog from '@/components/table_screen/dialogs/TopUpOpera
 import { useAccounts } from '@/hooks/useAccounts';
 import { useWebcam } from '@/hooks/useWebcam';
 import { submitConsoleLine } from '@/lib/crum_pkr';
+import { emitLobbyTablesChanged } from '@/lib/lobbyEvents';
 
 const readCreatedTableSnapshot = (tableId) => {
   if (typeof window === 'undefined') return null;
@@ -390,6 +391,9 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
   };
 
   const handleCloseTab = () => {
+    if (terminalResult?.tableComplete === true) {
+      emitLobbyTablesChanged({ lobbyId, tableId, reason: 'table-completed' });
+    }
     window.close();
   };
 

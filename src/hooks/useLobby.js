@@ -7,6 +7,7 @@ import {
   usePrivatePokerLobby,
 } from '@/hooks/usePrivatePokerLobby';
 import { fromChipUnits, getGameTypeName, getLobbyStatus } from '@/lib/constants';
+import { subscribeLobbyTablesChanged } from '@/lib/lobbyEvents';
 import { getBlindsForBuyin } from '@/lib/stakes';
 
 export function useLobby(lobbyId = undefined) {
@@ -39,6 +40,14 @@ export function useLobby(lobbyId = undefined) {
       setRefreshTrigger((current) => current + 1);
     }
   });
+
+  useEffect(() => (
+    subscribeLobbyTablesChanged((event) => {
+      if (lobbyId === undefined || event.lobbyId === lobbyId.toString()) {
+        setRefreshTrigger((current) => current + 1);
+      }
+    })
+  ), [lobbyId]);
 
   useEffect(() => {
     if (wasConnectedRef.current && !isConnected) {

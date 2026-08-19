@@ -100,6 +100,7 @@ export default function AccountSignin() {
     isSavingProfile,
     isSigningIn,
     isSubscribing,
+    isSubscriptionActive,
     isWalletConnected,
     operationDialog,
     profile,
@@ -115,6 +116,7 @@ export default function AccountSignin() {
   const operationDialogOkLabel = operationDialog?.error && !operationDialog?.isComplete
     ? 'Close'
     : 'Continue';
+  const isVerifiedSubscriptionProfile = accountStatus === ACCOUNT_STATUS.VERIFIED && !isSubscriptionActive;
 
   return (
     <>
@@ -216,7 +218,7 @@ export default function AccountSignin() {
                     Display name stays public. Contact and legal details are not stored in this version.
                   </p>
                 </div>
-                {profileMode === 'view' && (
+                {profileMode === 'view' && !isVerifiedSubscriptionProfile && (
                   <button
                     type="button"
                     onClick={handleProfileEdit}

@@ -56,7 +56,7 @@ flowchart LR
 5. If the account does not exist, the profile screen is shown.
 6. The player completes the profile and clicks Continue.
 7. The app opens a progress dialog before the wallet transaction prompt.
-8. The player wallet calls `createAccount(playerAddress)`.
+8. The player wallet calls `createAccount(playerAddress, displayName, encryptedProfile)`.
 9. After the transaction confirms, the app shows the account as unverified and asks the player to email `imperfect-protocol@protonmail.com`.
 10. If the account is already verified, the app continues to subscription selection when the subscription is expired, or to the main lobby when the subscription is active.
 
@@ -71,7 +71,7 @@ flowchart TD
     F -- "No" --> G["Show Profile screen"]
     G --> H["Player clicks Continue"]
     H --> I["Show create-account progress dialog"]
-    I --> J["Wallet tx: createAccount(player)"]
+    I --> J["Wallet tx: createAccount(player, profile)"]
     J --> K["Show Unverified account screen"]
     F -- "Yes" --> L{"Status is Verified?"}
     L -- "No" --> K

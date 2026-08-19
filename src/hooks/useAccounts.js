@@ -4,6 +4,7 @@ import { useConnection, useWriteContract } from 'wagmi';
 import { decodeAbiParameters, isAddress, parseAbi } from 'viem';
 import { useAccountSession } from '@/contexts/AccountSessionContext.jsx';
 import {
+  ACCOUNT_PROFILE_VERSION,
   EMPTY_ACCOUNT_PROFILE,
   buildAccountProfileBlob,
   profileHasRequiredFields,
@@ -39,9 +40,9 @@ export const ACCOUNT_STATUS = {
 };
 
 const ACCOUNT_ABI = parseAbi([
-  "function createAccount(address player_address)",
-  "function subscribe(address player_address, address operator, bytes annonce_public_key, bytes encrypted_profile, uint8 subscription_tier)",
-  "function updateAccount(address player_address, bytes annonce_public_key, bytes encrypted_profile)",
+  "function createAccount(address player_address, string display_name, bytes encrypted_profile)",
+  "function subscribe(address player_address, address operator, string display_name, bytes annonce_public_key, bytes encrypted_profile, uint8 subscription_tier)",
+  "function updateAccount(address player_address, string display_name, bytes annonce_public_key, bytes encrypted_profile)",
   "function getAccountStatus(address player_address) view returns (uint256)",
   "function accountStatusChangedAt(address player_address) view returns (uint256)",
   "function isSubscriptionActive(address player_address) view returns (bool)",
@@ -49,6 +50,19 @@ const ACCOUNT_ABI = parseAbi([
 ]);
 
 const normalizeAddress = (value) => value?.toLowerCase() ?? '';
+
+function profileRecordFromDisplayName(displayName, blobHex = '') {
+  const normalized = displayName?.trim?.() ?? '';
+  if (!normalized) return null;
+  return {
+    blobHex,
+    version: ACCOUNT_PROFILE_VERSION,
+    profile: {
+      ...EMPTY_ACCOUNT_PROFILE,
+      displayName: normalized,
+    },
+  };
+}
 
 const waitForUiPaint = () => new Promise((resolve) => {
   if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
@@ -76,6 +90,7 @@ function decodeAccountBlob(blob) {
         { name: 'operator', type: 'address' },
         { name: 'flags', type: 'uint256' },
         { name: 'statusChangedAt', type: 'uint256' },
+        { name: 'displayName', type: 'string' },
         { name: 'annoncePublicKey', type: 'bytes' },
         { name: 'encryptedProfile', type: 'bytes' },
         { name: 'subscriptionTier', type: 'uint8' },
@@ -140,6 +155,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     const operator = createOperatorAddress(accountSession.operatorPrivateKey);
     const args = [
       accountSession.walletAddress,
+      profile.displayName?.trim() ?? '',
       accountSession.operatorBlsPublicKey ?? '0x',
       blobHex,
     ];
@@ -168,7 +184,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
       }
       throw error;
     }
-  }, [accountSession, createOperatorAddress]);
+  }, [accountSession, createOperatorAddress, profile.displayName]);
 
   const loadAccountFromChain = useCallback(async (walletAddress, session) => {
     if (!isAddress(PRIVATE_POKER_CONTRACT_ADDRESS)) {
@@ -202,7 +218,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     const account = decodeAccountBlob(blob);
     const profileRecord = account.encryptedProfile && account.encryptedProfile !== '0x'
       ? await readAccountProfileBlob(account.encryptedProfile, session)
-      : null;
+      : profileRecordFromDisplayName(account.displayName);
     return { exists: true, profileRecord, account, status, statusChangedAt };
   }, []);
 
@@ -290,8 +306,10 @@ export function useAccounts({ playerAddresses = [] } = {}) {
             args: [playerAddress],
           });
           const account = decodeAccountBlob(blob);
-          const publicProfile = readAccountProfilePublicBlob(account.encryptedProfile);
-          const displayName = publicProfile.displayName?.trim();
+          const publicProfile = account.encryptedProfile && account.encryptedProfile !== '0x'
+            ? readAccountProfilePublicBlob(account.encryptedProfile)
+            : null;
+          const displayName = publicProfile?.displayName?.trim() || account.displayName?.trim();
           return displayName ? [playerAddress, displayName] : null;
         } catch (err) {
           console.debug('Player display name lookup failed:', playerAddress, err);
@@ -376,7 +394,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     setStep('subscription');
   }, [accountStatus, isSubscriptionActive, router]);
 
-  const createPlayerAccount = useCallback(async (session) => {
+  const createPlayerAccount = useCallback(async (session, blobHex = profileBlob) => {
     if (hasOnchainAccount || accountStatus !== ACCOUNT_STATUS.NONE) return false;
     if (!isAddress(PRIVATE_POKER_CONTRACT_ADDRESS)) {
       throw new Error('PrivatePoker contract address is not configured.');
@@ -398,7 +416,11 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     });
     await waitForUiPaint();
 
-    const args = [session.walletAddress];
+    const args = [
+      session.walletAddress,
+      profile.displayName?.trim() ?? '',
+      blobHex,
+    ];
     const overrides = await getBufferedGasOverrides(publicPokerClient, {
       address: PRIVATE_POKER_CONTRACT_ADDRESS,
       abi: ACCOUNT_ABI,
@@ -459,6 +481,8 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     address,
     failOperation,
     hasOnchainAccount,
+    profile.displayName,
+    profileBlob,
     updateOperationStep,
     writeWalletContract,
   ]);
@@ -469,7 +493,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
   }, []);
 
   const handleProfileContinue = useCallback(async () => {
-    if (!profileHasRequiredFields(profile) || !profileBlob) {
+    if (!profileHasRequiredFields(profile)) {
       setProfileMode('edit');
       setError('Complete your profile before continuing.');
       return;
@@ -477,8 +501,13 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     setError('');
     setIsSavingProfile(true);
     try {
+      let blobHex = profileBlob;
+      if (!blobHex) {
+        blobHex = await buildAccountProfileBlob(profile, accountSession);
+        setProfileBlob(blobHex);
+      }
       if (accountSession) {
-        const created = await createPlayerAccount(accountSession);
+        const created = await createPlayerAccount(accountSession, blobHex);
         if (created) return;
       }
       continueAfterProfile();
@@ -506,7 +535,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
       }
       setProfileBlob(blobHex);
       setProfileMode('view');
-      const created = await createPlayerAccount(accountSession);
+      const created = await createPlayerAccount(accountSession, blobHex);
       if (created) return;
       continueAfterProfile();
     } catch (err) {
@@ -594,7 +623,12 @@ export function useAccounts({ playerAddresses = [] } = {}) {
         setStep('status');
         return;
       }
-      if (!profileBlob) {
+      let currentProfileBlob = profileBlob;
+      if (!currentProfileBlob && profileHasRequiredFields(profile)) {
+        currentProfileBlob = await buildAccountProfileBlob(profile, session);
+        setProfileBlob(currentProfileBlob);
+      }
+      if (!currentProfileBlob) {
         setStep('profile');
         setError('Complete your profile before subscribing.');
         return;
@@ -663,8 +697,9 @@ export function useAccounts({ playerAddresses = [] } = {}) {
       const subscribeArgs = [
         session.walletAddress,
         session.operator,
+        profile.displayName?.trim() ?? '',
         session.operatorBlsPublicKey ?? '0x',
-        profileBlob,
+        currentProfileBlob,
         tierToContractId(selectedTier),
       ];
       let subscribeHash;
@@ -721,6 +756,8 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     approveOperatorPpdc,
     createOperatorAddress,
     failOperation,
+    profile.displayName,
+    profile,
     profileBlob,
     selectedTier,
     signIn,
@@ -744,6 +781,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     isSavingProfile,
     isSigningIn,
     isSubscribing,
+    isSubscriptionActive,
     isWalletConnected,
     operationDialog,
     profile,
