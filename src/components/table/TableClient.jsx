@@ -53,6 +53,9 @@ const rtcMessageLabels = (message) => {
   if (message.type === 'SettleHand') {
     return [`Final settlement signatures: ${message.signer_seats?.length ?? message.signature_shares?.length ?? 0}`];
   }
+  if (message.type === 'TableComplete') {
+    return ['Table ended'];
+  }
   if (message.type === 'StartHand') {
     return [`Start hand on-chain confirmed by Player ${Number(message.seat_no ?? 0) + 1}`];
   }
@@ -129,6 +132,7 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
       || incoming?.type === 'ChatMessage'
       || incoming?.type === 'StartHand'
       || incoming?.type === 'TableAggregatePublicKey'
+      || incoming?.type === 'TableComplete'
       || incoming?.type === 'SettleHand'
     ) {
       pokerTableRef.current?.handleNetworkMessage(incoming, playerAddress);

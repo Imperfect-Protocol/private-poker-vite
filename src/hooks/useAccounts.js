@@ -39,6 +39,7 @@ export const ACCOUNT_STATUS = {
 };
 
 const ACCOUNT_ABI = parseAbi([
+  "function createAccount(address player_address)",
   "function subscribe(address player_address, address operator, bytes annonce_public_key, bytes encrypted_profile, uint8 subscription_tier)",
   "function updateAccount(address player_address, bytes annonce_public_key, bytes encrypted_profile)",
   "function getAccountStatus(address player_address) view returns (uint256)",
@@ -48,6 +49,14 @@ const ACCOUNT_ABI = parseAbi([
 ]);
 
 const normalizeAddress = (value) => value?.toLowerCase() ?? '';
+
+const waitForUiPaint = () => new Promise((resolve) => {
+  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+    resolve();
+    return;
+  }
+  window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
+});
 
 function tierToContractId(tier) {
   const index = SUBSCRIPTION_TIERS.findIndex((entry) => entry.id === tier.id);
@@ -110,6 +119,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
   const [isSubscribing, setIsSubscribing] = useState(false);
   const [isCheckingAccount, setIsCheckingAccount] = useState(false);
   const [subscriptionStep, setSubscriptionStep] = useState('');
+  const [operationDialog, setOperationDialog] = useState(null);
   const [error, setError] = useState('');
 
   const signinData = useMemo(() => buildAccountSessionTypedData(), []);
@@ -240,7 +250,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
         setProfileBlob(profileRecord?.blobHex ?? '');
         setProfileMode(profileNeedsEdit(profileRecord) ? 'edit' : 'view');
         setIsSubscriptionActive(Boolean(isActive));
-        setStep(isVerified ? 'profile' : 'status');
+        setStep(!exists ? 'profile' : isVerified ? 'profile' : 'status');
       } catch (err) {
         console.debug('Account chain load failed:', err);
         if (isMounted) {
@@ -322,17 +332,136 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     }));
   }, []);
 
-  const continueAfterProfile = useCallback(() => {
-    if (accountStatus !== ACCOUNT_STATUS.VERIFIED) {
+  const updateOperationStep = useCallback((stepId, status) => {
+    setOperationDialog((current) => current
+      ? {
+        ...current,
+        steps: current.steps.map((step) => (
+          step.id === stepId ? { ...step, status } : step
+        )),
+      }
+      : current);
+  }, []);
+
+  const failOperation = useCallback((stepId, err, fallbackMessage) => {
+    const message = formatChainError(err, fallbackMessage);
+    setOperationDialog((current) => current
+      ? {
+        ...current,
+        error: message,
+        steps: current.steps.map((step) => (
+          step.id === stepId ? { ...step, status: 'error' } : step
+        )),
+      }
+      : current);
+  }, []);
+
+  const handleOperationDialogOk = useCallback(() => {
+    const nextAction = operationDialog?.nextAction;
+    setOperationDialog(null);
+    if (nextAction === 'mainLobby') {
+      router.push('/main-lobby');
+    }
+  }, [operationDialog, router]);
+
+  const continueAfterProfile = useCallback((status = accountStatus, subscriptionActive = isSubscriptionActive) => {
+    if (status !== ACCOUNT_STATUS.VERIFIED) {
       setStep('status');
       return;
     }
-    if (isSubscriptionActive) {
+    if (subscriptionActive) {
       router.push('/main-lobby');
       return;
     }
     setStep('subscription');
   }, [accountStatus, isSubscriptionActive, router]);
+
+  const createPlayerAccount = useCallback(async (session) => {
+    if (hasOnchainAccount || accountStatus !== ACCOUNT_STATUS.NONE) return false;
+    if (!isAddress(PRIVATE_POKER_CONTRACT_ADDRESS)) {
+      throw new Error('PrivatePoker contract address is not configured.');
+    }
+    if (!address || address.toLowerCase() !== session.walletAddress.toLowerCase()) {
+      throw new Error('Connected wallet does not match the signed-in account.');
+    }
+
+    setOperationDialog({
+      title: 'Create Account',
+      description: 'Your wallet will create an unverified account. After that, verification has to be completed before subscriptions and lobby access unlock.',
+      error: '',
+      isComplete: false,
+      nextAction: null,
+      steps: [
+        { id: 'profile', label: 'Prepare profile', status: 'complete' },
+        { id: 'account', label: 'Create unverified account', status: 'active' },
+      ],
+    });
+    await waitForUiPaint();
+
+    const args = [session.walletAddress];
+    const overrides = await getBufferedGasOverrides(publicPokerClient, {
+      address: PRIVATE_POKER_CONTRACT_ADDRESS,
+      abi: ACCOUNT_ABI,
+      functionName: 'createAccount',
+      args,
+      account: session.walletAddress,
+    });
+
+    let hash;
+    try {
+      hash = await writeWalletContract({
+        address: PRIVATE_POKER_CONTRACT_ADDRESS,
+        abi: ACCOUNT_ABI,
+        functionName: 'createAccount',
+        args,
+        ...overrides,
+      });
+      await waitForLoggedTransactionReceipt({
+        hash,
+        functionName: 'createAccount',
+        contract: PRIVATE_POKER_CONTRACT_ADDRESS,
+        args,
+      });
+      const statusChangedAt = await publicPokerClient.readContract({
+        address: PRIVATE_POKER_CONTRACT_ADDRESS,
+        abi: ACCOUNT_ABI,
+        functionName: 'accountStatusChangedAt',
+        args: [session.walletAddress],
+      });
+      updateOperationStep('account', 'complete');
+      setHasOnchainAccount(true);
+      setAccountStatus(ACCOUNT_STATUS.UNVERIFIED);
+      setAccountStatusChangedAt(statusChangedAt);
+      setStep('status');
+      setOperationDialog((current) => current
+        ? {
+          ...current,
+          title: 'Account Created',
+          description: 'Your account is unverified. Send an email to imperfect-protocol@protonmail.com to complete verification.',
+          isComplete: true,
+        }
+        : current);
+      return true;
+    } catch (err) {
+      if (!hash) {
+        logWriteTransactionError({
+          functionName: 'createAccount',
+          contract: PRIVATE_POKER_CONTRACT_ADDRESS,
+          args,
+          error: err,
+        });
+      }
+      failOperation('account', err, 'Account creation failed.');
+      throw err;
+    }
+  }, [
+    accountStatus,
+    address,
+    failOperation,
+    hasOnchainAccount,
+    updateOperationStep,
+    writeWalletContract,
+  ]);
 
   const handleProfileEdit = useCallback(() => {
     setProfileMode('edit');
@@ -348,14 +477,18 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     setError('');
     setIsSavingProfile(true);
     try {
+      if (accountSession) {
+        const created = await createPlayerAccount(accountSession);
+        if (created) return;
+      }
       continueAfterProfile();
     } catch (err) {
       console.error('Account profile sync failed:', err);
-      setError(err?.message ?? 'Profile sync failed.');
+      setError(formatChainError(err, 'Profile sync failed.'));
     } finally {
       setIsSavingProfile(false);
     }
-  }, [continueAfterProfile, profile, profileBlob]);
+  }, [accountSession, continueAfterProfile, createPlayerAccount, profile, profileBlob]);
 
   const handleProfileSave = useCallback(async () => {
     setError('');
@@ -373,14 +506,24 @@ export function useAccounts({ playerAddresses = [] } = {}) {
       }
       setProfileBlob(blobHex);
       setProfileMode('view');
+      const created = await createPlayerAccount(accountSession);
+      if (created) return;
       continueAfterProfile();
     } catch (err) {
       console.error('Account profile save failed:', err);
-      setError(err?.message ?? 'Profile save failed.');
+      setError(formatChainError(err, 'Profile save failed.'));
     } finally {
       setIsSavingProfile(false);
     }
-  }, [accountSession, continueAfterProfile, hasOnchainAccount, isSubscriptionActive, profile, syncProfileBlobToAccount]);
+  }, [
+    accountSession,
+    continueAfterProfile,
+    createPlayerAccount,
+    hasOnchainAccount,
+    isSubscriptionActive,
+    profile,
+    syncProfileBlobToAccount,
+  ]);
 
   const getPlayerDisplayname = useCallback((playerAddress) => {
     const normalized = normalizeAddress(playerAddress);
@@ -435,6 +578,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
 
   const handleContinue = useCallback(async () => {
     setError('');
+    let currentOperation = 'subscribe';
 
     try {
       if (!isAddress(PPDC_CONTRACT_ADDRESS)) {
@@ -463,9 +607,27 @@ export function useAccounts({ playerAddresses = [] } = {}) {
       const amount = tierPpdcAmount(selectedTier);
       const operator = createOperatorAddress(session.operatorPrivateKey);
 
+      setOperationDialog({
+        title: 'Activate Subscription',
+        description: 'Approve the operator, transfer subscription funds, and activate your Private Poker account. Keep this dialog open until every step is complete.',
+        error: '',
+        isComplete: false,
+        nextAction: null,
+        steps: [
+          { id: 'approve', label: `Approve ${PPDC} for operator`, status: 'active' },
+          { id: 'transfer', label: `Transfer ${PPDC} to Private Poker`, status: 'pending' },
+          { id: 'subscribe', label: 'Activate subscription', status: 'pending' },
+        ],
+      });
+      await waitForUiPaint();
+
+      currentOperation = 'approve';
       setSubscriptionStep(`Approve ${PPDC} for Operator...`);
       await approveOperatorPpdc(session, amount);
+      updateOperationStep('approve', 'complete');
 
+      currentOperation = 'transfer';
+      updateOperationStep('transfer', 'active');
       setSubscriptionStep(`Operator transfers ${PPDC} into PrivatePoker...`);
       const transferArgs = [session.walletAddress, PRIVATE_POKER_CONTRACT_ADDRESS, amount];
       let transferHash;
@@ -493,7 +655,10 @@ export function useAccounts({ playerAddresses = [] } = {}) {
         }
         throw error;
       }
+      updateOperationStep('transfer', 'complete');
 
+      currentOperation = 'subscribe';
+      updateOperationStep('subscribe', 'active');
       setSubscriptionStep('Operator creates account...');
       const subscribeArgs = [
         session.walletAddress,
@@ -527,12 +692,23 @@ export function useAccounts({ playerAddresses = [] } = {}) {
         }
         throw error;
       }
+      updateOperationStep('subscribe', 'complete');
 
       setHasOnchainAccount(true);
+      setAccountStatus(ACCOUNT_STATUS.VERIFIED);
       setIsSubscriptionActive(true);
-      router.push('/main-lobby');
+      setOperationDialog((current) => current
+        ? {
+          ...current,
+          title: 'Subscription Active',
+          description: 'Your account is verified and subscribed. Continue to the main lobby.',
+          isComplete: true,
+          nextAction: 'mainLobby',
+        }
+        : current);
     } catch (err) {
       console.error('Subscription failed:', err);
+      failOperation(currentOperation ?? 'subscribe', err, 'Subscription failed.');
       setError(formatChainError(err, 'Subscription failed.'));
     } finally {
       setIsSubscribing(false);
@@ -544,10 +720,11 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     address,
     approveOperatorPpdc,
     createOperatorAddress,
+    failOperation,
     profileBlob,
-    router,
     selectedTier,
     signIn,
+    updateOperationStep,
   ]);
 
   return {
@@ -568,10 +745,12 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     isSigningIn,
     isSubscribing,
     isWalletConnected,
+    operationDialog,
     profile,
     profileBlob,
     profileMode,
     selectedTier,
+    handleOperationDialogOk,
     setSelectedTier,
     signinData,
     signinFields,

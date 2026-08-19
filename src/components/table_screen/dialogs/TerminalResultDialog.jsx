@@ -4,10 +4,12 @@ import TableDialogOverlay from '@/components/dialog/TableDialogOverlay';
 export default function TerminalResultDialog({ result, onCloseTab }) {
   const won = result?.type === 'win';
   const cheated = result?.type === 'cheated';
-  const title = cheated ? result?.title : won ? 'You Won' : 'You Lose';
+  const tableComplete = result?.tableComplete === true;
+  const waitingForCirculation = tableComplete && result?.circulationComplete !== true;
+  const title = cheated ? result?.title : tableComplete ? 'Table Ended' : won ? 'You Won' : 'You Lose';
   const titleClass = cheated
     ? result?.cheat?.isViewerCheater ? 'text-red-300' : 'text-purple-300'
-    : won ? 'text-emerald-300' : 'text-red-300';
+    : tableComplete ? 'text-teal-300' : won ? 'text-emerald-300' : 'text-red-300';
 
   return (
     <TableDialogOverlay>
@@ -23,6 +25,11 @@ export default function TerminalResultDialog({ result, onCloseTab }) {
             {result.subtitle}
           </p>
         )}
+        {tableComplete && (
+          <p className={`mt-3 font-mono text-sm font-black uppercase tracking-[0.22em] ${won ? 'text-emerald-300' : 'text-red-300'}`}>
+            {won ? 'You Won' : 'You Lose'}
+          </p>
+        )}
       </div>
 
       <div className="p-6 flex flex-col gap-5">
@@ -33,12 +40,21 @@ export default function TerminalResultDialog({ result, onCloseTab }) {
           </div>
         )}
 
+        {waitingForCirculation && (
+          <p className="text-center font-mono text-xs uppercase tracking-[0.22em] text-teal-200">
+            Waiting for other players
+          </p>
+        )}
+
         <button
           type="button"
           onClick={onCloseTab}
-          className="w-full py-3 rounded-lg bg-teal-500 text-slate-950 font-black hover:bg-teal-400 transition-colors uppercase text-xs tracking-widest shadow-[0_0_20px_rgba(20,184,166,0.3)] cursor-pointer"
+          disabled={waitingForCirculation}
+          className={`w-full py-3 rounded-lg font-black transition-colors uppercase text-xs tracking-widest shadow-[0_0_20px_rgba(20,184,166,0.3)] ${waitingForCirculation
+            ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+            : 'bg-teal-500 text-slate-950 hover:bg-teal-400 cursor-pointer'}`}
         >
-          OK
+          {tableComplete ? 'Close' : 'OK'}
         </button>
       </div>
     </TableDialogOverlay>

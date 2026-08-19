@@ -1,6 +1,7 @@
 "use client";
 
 import { ACCOUNT_STATUS, useAccounts } from '@/hooks/useAccounts';
+import FlowStepDialog from '@/components/table_screen/dialogs/FlowStepDialog';
 
 function formatAddress(address) {
   if (!address) return '';
@@ -93,12 +94,14 @@ export default function AccountSignin() {
     handleProfileEdit,
     handleProfileSave,
     handleContinue,
+    handleOperationDialogOk,
     handleSignin,
     isCheckingAccount,
     isSavingProfile,
     isSigningIn,
     isSubscribing,
     isWalletConnected,
+    operationDialog,
     profile,
     profileMode,
     selectedTier,
@@ -109,8 +112,12 @@ export default function AccountSignin() {
     subscriptionStep,
     subscriptionTiers,
   } = useAccounts();
+  const operationDialogOkLabel = operationDialog?.error && !operationDialog?.isComplete
+    ? 'Close'
+    : 'Continue';
 
   return (
+    <>
     <main className="min-h-screen bg-slate-950 px-4 py-10 md:px-12">
       <div className="mx-auto grid min-h-[calc(100vh-7rem)] w-full max-w-6xl grid-cols-1 gap-8 lg:grid-cols-[0.88fr_1.12fr] lg:items-center">
         <section className="relative overflow-hidden rounded border border-teal-500/15 bg-slate-900/70 p-8 shadow-2xl">
@@ -269,7 +276,7 @@ export default function AccountSignin() {
                   disabled={isSavingProfile}
                   className="mt-6 w-full cursor-pointer rounded border border-teal-400 bg-teal-400 px-6 py-4 font-black uppercase tracking-[0.18em] text-slate-950 transition-all hover:bg-teal-300 disabled:cursor-wait disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500"
                 >
-                  {isSavingProfile ? 'Saving...' : 'Save Profile'}
+                  {isSavingProfile ? 'Saving...' : 'Continue'}
                 </button>
               ) : (
                 <button
@@ -327,5 +334,18 @@ export default function AccountSignin() {
         </section>)}
       </div>
     </main>
+    {operationDialog && (
+      <FlowStepDialog
+        title={operationDialog.title}
+        description={operationDialog.description}
+        steps={operationDialog.steps}
+        error={operationDialog.error}
+        isComplete={operationDialog.isComplete}
+        onOk={handleOperationDialogOk}
+        okLabel={operationDialogOkLabel}
+        canOkOnError
+      />
+    )}
+    </>
   );
 }
