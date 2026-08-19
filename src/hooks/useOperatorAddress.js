@@ -133,6 +133,22 @@ export function useOperatorAddress({ onOperatorTopUp } = {}) {
     });
   }, [createOperatorAddress]);
 
+  const writeTransactionFromOperator = useCallback(async ({
+    operatorPrivateKey,
+    to,
+    data,
+    functionName,
+    args,
+  }) => {
+    const operator = createOperatorAddress(operatorPrivateKey);
+    return operator.writeTransaction({
+      to,
+      data,
+      functionName,
+      args,
+    });
+  }, [createOperatorAddress]);
+
   const ensureOperatorGasForContract = useCallback(async ({
     operatorPrivateKey,
     contract,
@@ -154,5 +170,6 @@ export function useOperatorAddress({ onOperatorTopUp } = {}) {
     ensureOperatorGasForContract,
     topUpGasToken,
     writeContractFromOperator,
+    writeTransactionFromOperator,
   };
 }

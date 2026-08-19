@@ -1,5 +1,5 @@
-import { mesh as devMesh } from './dev';
-import { mesh as mainMesh } from './main';
+import { mesh as devMesh } from './dev.js';
+import { mesh as mainMesh } from './main.js';
 
 const meshes = {
   dev: devMesh,

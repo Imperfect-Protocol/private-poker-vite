@@ -29,10 +29,20 @@ const PPDC_ABI = parseAbi([
 ]);
 
 const PPDC = 'PPDC';
+export const ACCOUNT_STATUS = {
+  NONE: 0n,
+  UNVERIFIED: 1n,
+  VERIFIED: 2n,
+  SUSPENDED: 4n,
+  BANNED: 8n,
+  DELETED: 16n,
+};
 
 const ACCOUNT_ABI = parseAbi([
   "function subscribe(address player_address, address operator, bytes annonce_public_key, bytes encrypted_profile, uint8 subscription_tier)",
-  "function updateAccount(address player_address, address operator, bytes annonce_public_key, bytes encrypted_profile)",
+  "function updateAccount(address player_address, bytes annonce_public_key, bytes encrypted_profile)",
+  "function getAccountStatus(address player_address) view returns (uint256)",
+  "function accountStatusChangedAt(address player_address) view returns (uint256)",
   "function isSubscriptionActive(address player_address) view returns (bool)",
   "function getAccount(address player_address) view returns (bytes)",
 ]);
@@ -55,6 +65,8 @@ function decodeAccountBlob(blob) {
       components: [
         { name: 'playerAddress', type: 'address' },
         { name: 'operator', type: 'address' },
+        { name: 'flags', type: 'uint256' },
+        { name: 'statusChangedAt', type: 'uint256' },
         { name: 'annoncePublicKey', type: 'bytes' },
         { name: 'encryptedProfile', type: 'bytes' },
         { name: 'subscriptionTier', type: 'uint8' },
@@ -68,6 +80,16 @@ function decodeAccountBlob(blob) {
   return account;
 }
 
+export function accountStatusLabel(flags) {
+  const status = BigInt(flags ?? 0n);
+  if (status === ACCOUNT_STATUS.VERIFIED) return 'Verified';
+  if (status === ACCOUNT_STATUS.SUSPENDED) return 'Suspended';
+  if (status === ACCOUNT_STATUS.BANNED) return 'Banned';
+  if (status === ACCOUNT_STATUS.DELETED) return 'Deleted';
+  if (status === ACCOUNT_STATUS.UNVERIFIED) return 'Unverified';
+  return 'Unverified';
+}
+
 export function useAccounts({ playerAddresses = [] } = {}) {
   const router = useRouter();
   const { accountSession, isSigningIn, isWalletConnected, signIn } = useAccountSession();
@@ -79,6 +101,8 @@ export function useAccounts({ playerAddresses = [] } = {}) {
   const [profile, setProfile] = useState(EMPTY_ACCOUNT_PROFILE);
   const [profileBlob, setProfileBlob] = useState('');
   const [hasOnchainAccount, setHasOnchainAccount] = useState(false);
+  const [accountStatus, setAccountStatus] = useState(ACCOUNT_STATUS.NONE);
+  const [accountStatusChangedAt, setAccountStatusChangedAt] = useState(0n);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isSubscriptionActive, setIsSubscriptionActive] = useState(false);
   const [playerDisplaynames, setPlayerDisplaynames] = useState({});
@@ -106,7 +130,6 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     const operator = createOperatorAddress(accountSession.operatorPrivateKey);
     const args = [
       accountSession.walletAddress,
-      accountSession.operator,
       accountSession.operatorBlsPublicKey ?? '0x',
       blobHex,
     ];
@@ -139,7 +162,25 @@ export function useAccounts({ playerAddresses = [] } = {}) {
 
   const loadAccountFromChain = useCallback(async (walletAddress, session) => {
     if (!isAddress(PRIVATE_POKER_CONTRACT_ADDRESS)) {
-      return { exists: false, profileRecord: null, account: null };
+      return { exists: false, profileRecord: null, account: null, status: ACCOUNT_STATUS.NONE, statusChangedAt: 0n };
+    }
+
+    const status = await publicPokerClient.readContract({
+      address: PRIVATE_POKER_CONTRACT_ADDRESS,
+      abi: ACCOUNT_ABI,
+      functionName: 'getAccountStatus',
+      args: [walletAddress],
+    });
+    const statusChangedAt = status === ACCOUNT_STATUS.NONE
+      ? 0n
+      : await publicPokerClient.readContract({
+        address: PRIVATE_POKER_CONTRACT_ADDRESS,
+        abi: ACCOUNT_ABI,
+        functionName: 'accountStatusChangedAt',
+        args: [walletAddress],
+      });
+    if (status === ACCOUNT_STATUS.NONE) {
+      return { exists: false, profileRecord: null, account: null, status, statusChangedAt };
     }
 
     const blob = await publicPokerClient.readContract({
@@ -149,8 +190,10 @@ export function useAccounts({ playerAddresses = [] } = {}) {
       args: [walletAddress],
     });
     const account = decodeAccountBlob(blob);
-    const profileRecord = await readAccountProfileBlob(account.encryptedProfile, session);
-    return { exists: true, profileRecord, account };
+    const profileRecord = account.encryptedProfile && account.encryptedProfile !== '0x'
+      ? await readAccountProfileBlob(account.encryptedProfile, session)
+      : null;
+    return { exists: true, profileRecord, account, status, statusChangedAt };
   }, []);
 
   useEffect(() => {
@@ -162,6 +205,8 @@ export function useAccounts({ playerAddresses = [] } = {}) {
       if (!isAddress(PRIVATE_POKER_CONTRACT_ADDRESS)) {
         if (isMounted) {
           setHasOnchainAccount(false);
+          setAccountStatus(ACCOUNT_STATUS.NONE);
+          setAccountStatusChangedAt(0n);
           setProfile(EMPTY_ACCOUNT_PROFILE);
           setProfileBlob('');
           setProfileMode('edit');
@@ -173,33 +218,40 @@ export function useAccounts({ playerAddresses = [] } = {}) {
       }
 
       try {
-        const { exists, profileRecord } = await loadAccountFromChain(
+        const { exists, profileRecord, status, statusChangedAt } = await loadAccountFromChain(
           accountSession.walletAddress,
           accountSession,
         );
-        const isActive = await publicPokerClient.readContract({
-          address: PRIVATE_POKER_CONTRACT_ADDRESS,
-          abi: ACCOUNT_ABI,
-          functionName: 'isSubscriptionActive',
-          args: [accountSession.walletAddress],
-        });
+        const isVerified = status === ACCOUNT_STATUS.VERIFIED;
+        const isActive = isVerified
+          ? await publicPokerClient.readContract({
+            address: PRIVATE_POKER_CONTRACT_ADDRESS,
+            abi: ACCOUNT_ABI,
+            functionName: 'isSubscriptionActive',
+            args: [accountSession.walletAddress],
+          })
+          : false;
         if (!isMounted) return;
 
         setHasOnchainAccount(exists);
+        setAccountStatus(status);
+        setAccountStatusChangedAt(statusChangedAt);
         setProfile(profileRecord?.profile ?? EMPTY_ACCOUNT_PROFILE);
         setProfileBlob(profileRecord?.blobHex ?? '');
         setProfileMode(profileNeedsEdit(profileRecord) ? 'edit' : 'view');
         setIsSubscriptionActive(Boolean(isActive));
-        setStep('profile');
+        setStep(isVerified ? 'profile' : 'status');
       } catch (err) {
         console.debug('Account chain load failed:', err);
         if (isMounted) {
           setHasOnchainAccount(false);
+          setAccountStatus(ACCOUNT_STATUS.NONE);
+          setAccountStatusChangedAt(0n);
           setProfile(EMPTY_ACCOUNT_PROFILE);
           setProfileBlob('');
           setProfileMode('edit');
           setIsSubscriptionActive(false);
-          setStep('profile');
+          setStep('status');
         }
       } finally {
         if (isMounted) setIsCheckingAccount(false);
@@ -271,12 +323,16 @@ export function useAccounts({ playerAddresses = [] } = {}) {
   }, []);
 
   const continueAfterProfile = useCallback(() => {
+    if (accountStatus !== ACCOUNT_STATUS.VERIFIED) {
+      setStep('status');
+      return;
+    }
     if (isSubscriptionActive) {
       router.push('/main-lobby');
       return;
     }
     setStep('subscription');
-  }, [isSubscriptionActive, router]);
+  }, [accountStatus, isSubscriptionActive, router]);
 
   const handleProfileEdit = useCallback(() => {
     setProfileMode('edit');
@@ -312,7 +368,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     setIsSavingProfile(true);
     try {
       const blobHex = await buildAccountProfileBlob(profile, accountSession);
-      if (hasOnchainAccount && isAddress(PRIVATE_POKER_CONTRACT_ADDRESS)) {
+      if (hasOnchainAccount && isSubscriptionActive && isAddress(PRIVATE_POKER_CONTRACT_ADDRESS)) {
         await syncProfileBlobToAccount(blobHex);
       }
       setProfileBlob(blobHex);
@@ -324,7 +380,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     } finally {
       setIsSavingProfile(false);
     }
-  }, [accountSession, continueAfterProfile, hasOnchainAccount, profile, syncProfileBlobToAccount]);
+  }, [accountSession, continueAfterProfile, hasOnchainAccount, isSubscriptionActive, profile, syncProfileBlobToAccount]);
 
   const getPlayerDisplayname = useCallback((playerAddress) => {
     const normalized = normalizeAddress(playerAddress);
@@ -390,6 +446,10 @@ export function useAccounts({ playerAddresses = [] } = {}) {
 
       const session = accountSession ?? await signIn();
       if (!session) return;
+      if (accountStatus !== ACCOUNT_STATUS.VERIFIED) {
+        setStep('status');
+        return;
+      }
       if (!profileBlob) {
         setStep('profile');
         setError('Complete your profile before subscribing.');
@@ -480,6 +540,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     }
   }, [
     accountSession,
+    accountStatus,
     address,
     approveOperatorPpdc,
     createOperatorAddress,
@@ -491,6 +552,9 @@ export function useAccounts({ playerAddresses = [] } = {}) {
 
   return {
     accountSession,
+    accountStatus,
+    accountStatusChangedAt,
+    accountStatusLabel: accountStatusLabel(accountStatus),
     error,
     handleProfileChange,
     handleProfileContinue,

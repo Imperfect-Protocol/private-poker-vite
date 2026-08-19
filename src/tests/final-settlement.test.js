@@ -106,7 +106,6 @@ test('final settlement round follows P2P gameplay and Lagrange-aggregates table-
     1n,
     777n,
     aggregateTablePublicKey,
-    tableAggregateVerification.aggregateSignature,
   ]);
 
   for (let player = 0; player < numPlayers; player += 1) {
@@ -210,5 +209,5 @@ test('final settlement round follows P2P gameplay and Lagrange-aggregates table-
     finalVerification.settlementMessage.chips_balances.map(BigInt),
   );
   assert.equal(contractArgs[6], finalVerification.settlementDigest);
-  assert.equal(contractArgs[7], finalVerification.aggregateSignature);
+  assert.equal(contractArgs[7], finalVerification.aggregatePublicKey);
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useAccounts } from '@/hooks/useAccounts';
+import { ACCOUNT_STATUS, useAccounts } from '@/hooks/useAccounts';
 
 function formatAddress(address) {
   if (!address) return '';
@@ -60,9 +60,33 @@ function ProfileField({ label, value, field, type = 'text', editable, disabled =
   );
 }
 
+function AccountStatusPanel({ status }) {
+  const message = (() => {
+    if (status === ACCOUNT_STATUS.SUSPENDED) return 'Your account has been suspended.';
+    if (status === ACCOUNT_STATUS.BANNED) return 'Your account has been banned.';
+    if (status === ACCOUNT_STATUS.DELETED) return 'Your account has been deleted.';
+    return 'Your account needs to be verified. Send an email to imperfect-protocol@protonmail.com.';
+  })();
+
+  return (
+    <div>
+      <div className="border-b border-slate-800 pb-6">
+        <h2 className="text-2xl font-black uppercase tracking-tight text-white">Verification</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-400">
+          {message}
+        </p>
+      </div>
+      <div className="mt-6 rounded border border-cyan-500/25 bg-slate-950/70 px-4 py-4 text-sm font-semibold leading-7 text-cyan-100">
+        {message}
+      </div>
+    </div>
+  );
+}
+
 export default function AccountSignin() {
   const {
     accountSession,
+    accountStatus,
     error,
     handleProfileChange,
     handleProfileContinue,
@@ -112,6 +136,9 @@ export default function AccountSignin() {
               </div>
               <div className={`border-l-2 pl-4 ${step === 'profile' ? 'border-teal-400 text-teal-300' : 'border-teal-900 text-slate-500'}`}>
                 Profile
+              </div>
+              <div className={`border-l-2 pl-4 ${step === 'status' ? 'border-teal-400 text-teal-300' : 'border-teal-900 text-slate-500'}`}>
+                Verification
               </div>
               <div className={`border-l-2 pl-4 ${step === 'subscription' ? 'border-teal-400 text-teal-300' : 'border-teal-900 text-slate-500'}`}>
                 Subscription
@@ -171,6 +198,8 @@ export default function AccountSignin() {
                 {!isWalletConnected ? 'Connect Wallet' : isSigningIn ? 'Signing...' : 'Sign In'}
               </button>
             </div>
+          ) : step === 'status' ? (
+            <AccountStatusPanel status={accountStatus} />
           ) : step === 'profile' ? (
             <div>
               <div className="flex flex-col gap-4 border-b border-slate-800 pb-6 md:flex-row md:items-end md:justify-between">
