@@ -23,6 +23,7 @@ export const ACCOUNT_CONTRACT_ADDRESS = CHAIN_CONFIG.privatePokerContractAddress
 export const CHIPS_CONTRACT_ADDRESS = CHAIN_CONFIG.privatePokerContractAddress;
 export const CASHIER_CONTRACT_ADDRESS = CHAIN_CONFIG.privatePokerContractAddress;
 export const SETTLER_FACET_ADDRESS = CHAIN_CONFIG.settlerFacetAddress;
+export const SIGNATORY_CONTRACT_ADDRESS = CHAIN_CONFIG.signatoryAddress;
 export const HASH_TO_CURVE_CONTRACT_ADDRESS = CHAIN_CONFIG.hashToCurveAddress;
 export const VERIFY_SIGNATURE_CONTRACT_ADDRESS = CHAIN_CONFIG.verifySignatureAddress;
 export const CHAIN_MAX_GAS = CHAIN_CONFIG.maxGas ?? {};

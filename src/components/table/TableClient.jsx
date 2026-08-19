@@ -13,6 +13,7 @@ import TopUpOperatorGasDialog from '@/components/table_screen/dialogs/TopUpOpera
 import { useAccounts } from '@/hooks/useAccounts';
 import { useWebcam } from '@/hooks/useWebcam';
 import { submitConsoleLine } from '@/lib/crum_pkr';
+import { emitLobbyTablesChanged } from '@/lib/lobbyEvents';
 
 const readCreatedTableSnapshot = (tableId) => {
   if (typeof window === 'undefined') return null;
@@ -52,6 +53,9 @@ const rtcMessageLabels = (message) => {
   }
   if (message.type === 'SettleHand') {
     return [`Final settlement signatures: ${message.signer_seats?.length ?? message.signature_shares?.length ?? 0}`];
+  }
+  if (message.type === 'TableComplete') {
+    return ['Table ended'];
   }
   if (message.type === 'StartHand') {
     return [`Start hand on-chain confirmed by Player ${Number(message.seat_no ?? 0) + 1}`];
@@ -129,6 +133,7 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
       || incoming?.type === 'ChatMessage'
       || incoming?.type === 'StartHand'
       || incoming?.type === 'TableAggregatePublicKey'
+      || incoming?.type === 'TableComplete'
       || incoming?.type === 'SettleHand'
     ) {
       pokerTableRef.current?.handleNetworkMessage(incoming, playerAddress);
@@ -386,6 +391,9 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
   };
 
   const handleCloseTab = () => {
+    if (terminalResult?.tableComplete === true) {
+      emitLobbyTablesChanged({ lobbyId, tableId, reason: 'table-completed' });
+    }
     window.close();
   };
 

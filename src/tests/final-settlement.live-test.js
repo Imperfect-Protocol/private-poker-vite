@@ -3,17 +3,27 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { createPublicClient, createWalletClient, http, isAddress, parseAbi, parseEther } from 'viem';
+import {
+  createPublicClient,
+  createWalletClient,
+  decodeFunctionResult,
+  encodeFunctionData,
+  http,
+  isAddress,
+  parseAbi,
+  parseEther,
+} from 'viem';
 import { mnemonicToAccount, privateKeyToAccount } from 'viem/accounts';
 
 import {
   PRIVATE_POKER_CONTRACT_ADDRESS,
   PPDC_CONTRACT_ADDRESS,
-  CHAIN_ID,
   CHAIN_KEY,
   CHAIN_MAX_GAS,
   CHAIN_RPC_URL,
-} from '../lib/chain/index.js';
+  liveDevnodeChain,
+} from './live-devnode-chain.js';
+import { toChipUnits } from '../lib/constants.js';
 import {
   buildFinalHandSettlement,
   buildNextFinalVerification,
@@ -37,44 +47,32 @@ const PRIVATE_POKER_ABI = parseAbi([
   'function getLobbyById(uint256 lobbyId) view returns (bytes)',
   'function balanceOf(address account) view returns (uint256)',
   'function approve(address spender, uint256 value) returns (bool)',
-  'function subscribe(address player_address, address operator, bytes annonce_public_key, bytes encrypted_profile, uint8 subscription_tier)',
-  'function createTable(uint256 lobby_id, uint256 table_id, string calldata name, uint256 buy_in, uint256 num_players, address player_address, address operator, bytes calldata annonce_public_key)',
-  'function joinTable(uint256 lobby_id, uint256 table_id, address player_address, address operator, bytes calldata annonce_public_key)',
-  'function setTableAggregatePublicKey(uint256 lobby_id, uint256 table_id, bytes aggregate_public_key, bytes aggregate_signature)',
+  'function subscribe(address player_address, address operator, string display_name, bytes annonce_public_key, bytes encrypted_profile, uint8 subscription_tier)',
+  'function createAccount(address player_address, string display_name, bytes encrypted_profile)',
+  'function setAccountStatus(address player_address, uint256 flags)',
+  'function getAccountStatus(address player_address) view returns (uint256)',
+  'function createTable(uint256 lobby_id, uint256 table_id, string calldata name, uint256 buy_in, uint256 num_players, address player_address, bytes calldata annonce_public_key)',
+  'function joinTable(uint256 lobby_id, uint256 table_id, address player_address, bytes calldata annonce_public_key)',
+  'function setTableAggregatePublicKey(uint256 lobby_id, uint256 table_id, bytes aggregate_public_key)',
   'function startHand(uint256 lobby_id, uint256 table_id)',
-  'function settleHand(uint256 lobby_id, uint256 table_id, uint256 hand_id, uint256 pot_size, uint256[] pot_split, uint256[] chips_balances, bytes digest, bytes aggregate_signature)',
+  'function settleHand(uint256 lobby_id, uint256 table_id, uint256 hand_id, uint256 pot_size, uint256[] pot_split, uint256[] chips_balances, bytes digest, bytes aggregate_public_key) returns (uint256)',
 ]);
 
 const TEST_USDC_ABI = parseAbi([
-  'function faucet(uint256 value) returns (bool)',
+  'function faucet(address to, uint256 value) returns (bool)',
   'function transfer(address to, uint256 value) returns (bool)',
   'function balanceOf(address account) view returns (uint256)',
 ]);
 
 const DEV_MNEMONIC = 'test test test test test test test test test test test junk';
-const DEV_OWNER_PRIVATE_KEY = process.env.PP_PRIVATE_KEY
-  ?? process.env.PRIVATE_POKER_DEV_OWNER_PRIVATE_KEY
-  ?? '0xb6b15c8cb491557369f3c7d2c287b053eb229daa9c22138887752191c9520659';
+const DEV_OWNER_PRIVATE_KEY = '0xb6b15c8cb491557369f3c7d2c287b053eb229daa9c22138887752191c9520659';
 const LOBBY_ID = 1n;
 const NUM_PLAYERS = Number(process.env.PRIVATE_POKER_LIVE_PLAYERS ?? 3);
-const BUY_IN = BigInt(INITIAL_CHIPS);
+const BUY_IN = toChipUnits(INITIAL_CHIPS);
+const ACCOUNT_STATUS_VERIFIED = 2n;
 const STARTER_SUBSCRIPTION_USDC = 10_000_000n;
 const PLAYER_GAS_TOP_UP = parseEther('0.1');
 const ETH_USD = 2000;
-
-function rpcUrl() {
-  if (CHAIN_RPC_URL === '/local-rpc') return 'http://localhost:8547';
-  return CHAIN_RPC_URL;
-}
-
-function testChain() {
-  return {
-    id: CHAIN_ID,
-    name: CHAIN_KEY,
-    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-    rpcUrls: { default: { http: [rpcUrl()] } },
-  };
-}
 
 function standardAccount(index) {
   return mnemonicToAccount(DEV_MNEMONIC, { addressIndex: index });
@@ -109,6 +107,21 @@ function receiptLine(label, receipt) {
   ].join(' ');
 }
 
+function appendSignatureToCalldata(calldata, signature) {
+  const normalizedSignature = String(signature).startsWith('0x') ? String(signature) : `0x${signature}`;
+  return `${calldata}${normalizedSignature.slice(2)}`;
+}
+
+function expectedTableWinnerSeat(chipsBalances) {
+  let winnerSeat = null;
+  for (let seat = 0; seat < chipsBalances.length; seat += 1) {
+    if (BigInt(chipsBalances[seat]) === 0n) continue;
+    if (winnerSeat != null) return BigInt(chipsBalances.length);
+    winnerSeat = seat;
+  }
+  return winnerSeat == null ? BigInt(chipsBalances.length) : BigInt(winnerSeat);
+}
+
 async function writeAndWait({
   publicClient,
   walletClient,
@@ -117,16 +130,27 @@ async function writeAndWait({
   abi = PRIVATE_POKER_ABI,
   functionName,
   args,
+  signature,
   gas = gasLimit(functionName),
 }) {
-  const hash = await walletClient.writeContract({
-    account,
-    address,
-    abi,
-    functionName,
-    args,
-    gas,
-  });
+  const data = signature
+    ? appendSignatureToCalldata(encodeFunctionData({ abi, functionName, args }), signature)
+    : null;
+  const hash = data
+    ? await walletClient.sendTransaction({
+      account,
+      to: address,
+      data,
+      gas,
+    })
+    : await walletClient.writeContract({
+      account,
+      address,
+      abi,
+      functionName,
+      args,
+      gas,
+    });
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   console.log(receiptLine(`${functionName}(${account.address})`, receipt));
   assert.equal(receipt.status, 'success', `${functionName} reverted in tx ${hash}`);
@@ -157,7 +181,32 @@ async function ensurePlayerGas({ publicClient, walletClient, owner, player }) {
   return receipt;
 }
 
-async function preparePlayer({ publicClient, walletClient, account, announcePublicKey }) {
+async function preparePlayer({ publicClient, walletClient, owner, account, announcePublicKey }) {
+  const displayName = `Player ${account.address.slice(2, 6)}`;
+  const accountStatus = await publicClient.readContract({
+    address: PRIVATE_POKER_CONTRACT_ADDRESS,
+    abi: PRIVATE_POKER_ABI,
+    functionName: 'getAccountStatus',
+    args: [account.address],
+  });
+  if (accountStatus === 0n) {
+    await writeAndWait({
+      publicClient,
+      walletClient,
+      account: owner,
+      functionName: 'createAccount',
+      args: [account.address, displayName, '0x'],
+    });
+  }
+  if (accountStatus !== ACCOUNT_STATUS_VERIFIED) {
+    await writeAndWait({
+      publicClient,
+      walletClient,
+      account: owner,
+      functionName: 'setAccountStatus',
+      args: [account.address, ACCOUNT_STATUS_VERIFIED],
+    });
+  }
   await writeAndWait({
     publicClient,
     walletClient,
@@ -165,7 +214,7 @@ async function preparePlayer({ publicClient, walletClient, account, announcePubl
     address: PPDC_CONTRACT_ADDRESS,
     abi: TEST_USDC_ABI,
     functionName: 'faucet',
-    args: [STARTER_SUBSCRIPTION_USDC],
+    args: [account.address, STARTER_SUBSCRIPTION_USDC],
     gas: 1_000_000n,
   });
   await writeAndWait({
@@ -183,7 +232,7 @@ async function preparePlayer({ publicClient, walletClient, account, announcePubl
     walletClient,
     account,
     functionName: 'subscribe',
-    args: [account.address, account.address, announcePublicKey, '0x', 1],
+    args: [account.address, account.address, displayName, announcePublicKey, '0x', 1],
   });
   await writeAndWait({
     publicClient,
@@ -208,9 +257,9 @@ test('live final settlement creates table, joins players, starts hand, and settl
   assert.ok(isAddress(PPDC_CONTRACT_ADDRESS), 'TEST_USDC/PPDC address is not configured');
   assert.ok(NUM_PLAYERS >= 2, 'live final settlement requires at least two players');
 
-  const chain = testChain();
-  const publicClient = createPublicClient({ chain, transport: http(rpcUrl()) });
-  const walletClient = createWalletClient({ chain, transport: http(rpcUrl()) });
+  const chain = liveDevnodeChain();
+  const publicClient = createPublicClient({ chain, transport: http(CHAIN_RPC_URL) });
+  const walletClient = createWalletClient({ chain, transport: http(CHAIN_RPC_URL) });
   const owner = privateKeyToAccount(DEV_OWNER_PRIVATE_KEY);
   const tableId = liveTableId();
   const {
@@ -245,6 +294,7 @@ test('live final settlement creates table, joins players, starts hand, and settl
     await preparePlayer({
       publicClient,
       walletClient,
+      owner,
       account: accounts[player],
       announcePublicKey: tableSeats[player].announcePublicKey,
     });
@@ -262,7 +312,6 @@ test('live final settlement creates table, joins players, starts hand, and settl
       BUY_IN,
       BigInt(NUM_PLAYERS),
       accounts[0].address,
-      accounts[0].address,
       tableSeats[0].announcePublicKey,
     ],
   });
@@ -276,7 +325,6 @@ test('live final settlement creates table, joins players, starts hand, and settl
       args: [
         LOBBY_ID,
         tableId,
-        accounts[player].address,
         accounts[player].address,
         tableSeats[player].announcePublicKey,
       ],
@@ -327,6 +375,7 @@ test('live final settlement creates table, joins players, starts hand, and settl
       tableId,
       tableAggregateVerification,
     }),
+    signature: tableAggregateVerification.aggregateSignature,
   });
 
   for (let player = 0; player < NUM_PLAYERS; player += 1) {
@@ -368,12 +417,38 @@ test('live final settlement creates table, joins players, starts hand, and settl
     handId: BigInt(HAND_ID),
     finalVerification,
   });
+  const settleCalldata = appendSignatureToCalldata(
+    encodeFunctionData({
+      abi: PRIVATE_POKER_ABI,
+      functionName: 'settleHand',
+      args: settleArgs,
+    }),
+    finalVerification.aggregateSignature,
+  );
+  const settleCall = await publicClient.call({
+    account: accounts[NUM_PLAYERS - 1].address,
+    to: PRIVATE_POKER_CONTRACT_ADDRESS,
+    data: settleCalldata,
+    gas: gasLimit('settleHand'),
+  });
+  const winningSeat = decodeFunctionResult({
+    abi: PRIVATE_POKER_ABI,
+    functionName: 'settleHand',
+    data: settleCall.data,
+  });
+  assert.equal(
+    winningSeat,
+    expectedTableWinnerSeat(finalVerification.settlementMessage.chips_balances),
+    'settleHand returned unexpected winning seat',
+  );
+
   const settleReceipt = await writeAndWait({
     publicClient,
     walletClient,
     account: accounts[NUM_PLAYERS - 1],
     functionName: 'settleHand',
     args: settleArgs,
+    signature: finalVerification.aggregateSignature,
   });
 
   const totalGasUsed = settleReceipt.gasUsed;

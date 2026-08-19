@@ -7,6 +7,7 @@ import {
   usePrivatePokerLobby,
 } from '@/hooks/usePrivatePokerLobby';
 import { fromChipUnits, getGameTypeName, getLobbyStatus } from '@/lib/constants';
+import { subscribeLobbyTablesChanged } from '@/lib/lobbyEvents';
 import { getBlindsForBuyin } from '@/lib/stakes';
 
 export function useLobby(lobbyId = undefined) {
@@ -39,6 +40,14 @@ export function useLobby(lobbyId = undefined) {
       setRefreshTrigger((current) => current + 1);
     }
   });
+
+  useEffect(() => (
+    subscribeLobbyTablesChanged((event) => {
+      if (lobbyId === undefined || event.lobbyId === lobbyId.toString()) {
+        setRefreshTrigger((current) => current + 1);
+      }
+    })
+  ), [lobbyId]);
 
   useEffect(() => {
     if (wasConnectedRef.current && !isConnected) {
@@ -91,16 +100,19 @@ export function useLobby(lobbyId = undefined) {
 
         if (count > 0) {
           const rawTables = await getTablesRange(lobbyId, 0, count);
-          const mappedTables = rawTables.map((tableData) => ({
-            id: tableData.id,
-            name: tableData.name,
-            buyin: tableData.buyIn,
-            game: getGameTypeName(lobbyData.gameType),
-            blinds: getBlindsForBuyin(tableData.buyIn).label,
-            max_players: tableData.flags,
-            current_players: tableData.playerCount,
-            state: 'seating',
-          }));
+          const mappedTables = rawTables.map((tableData) => {
+            const blinds = getBlindsForBuyin(tableData.buyIn);
+            return {
+              id: tableData.id,
+              name: tableData.name,
+              buyin: tableData.buyIn,
+              game: getGameTypeName(lobbyData.gameType),
+              blinds: blinds?.label ?? '0/0',
+              max_players: tableData.flags,
+              current_players: tableData.playerCount,
+              state: 'seating',
+            };
+          });
           setTables(mappedTables);
         } else {
           setTables([]);

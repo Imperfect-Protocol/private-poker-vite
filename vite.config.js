@@ -6,6 +6,7 @@ import tailwindcss from '@tailwindcss/vite'
 import { standalone } from 'vite-plugin-standalone'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { devProxyForSelectedConfig } from './src/lib/proxy/dev.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -16,6 +17,8 @@ const envValue = (...names) => {
     .find((candidate) => candidate != null)
   return value == null ? 'undefined' : JSON.stringify(value)
 }
+
+const devProxy = devProxyForSelectedConfig()
 
 export default defineConfig({
   base: '/',
@@ -30,18 +33,7 @@ export default defineConfig({
   ],
   server: {
     port: 3000,
-    proxy: {
-      '/local-rpc': {
-        target: 'http://localhost:8547',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/local-rpc$/, '/'),
-      },
-      '/local-mesh': {
-        target: 'http://localhost:3001',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/local-mesh/, ''),
-      }
-    },
+    ...(Object.keys(devProxy).length > 0 ? { proxy: devProxy } : {}),
   },
   resolve: {
     alias: {

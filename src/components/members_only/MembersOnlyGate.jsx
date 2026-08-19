@@ -23,7 +23,7 @@ function MembershipPending() {
 }
 
 export default function MembersOnlyGate({ children }) {
-  const { isAccessPending, isMember } = useMemberAccess();
+  const { accountStatus, isAccessPending, isMember } = useMemberAccess();
 
   if (isAccessPending) {
     return <MembershipPending />;
@@ -32,7 +32,7 @@ export default function MembersOnlyGate({ children }) {
   if (!isMember) {
     return (
       <div className="animate-[membership-fade-in_320ms_ease-out_both]">
-        <MembersOnlyArea />
+        <MembersOnlyArea accountStatus={accountStatus} />
       </div>
     );
   }

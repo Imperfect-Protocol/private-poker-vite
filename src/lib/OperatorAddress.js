@@ -98,6 +98,20 @@ export class OperatorAddress {
     });
   }
 
+  async sendTransaction({ walletClient, to, data, gasOverrides }) {
+    const nonce = await publicPokerClient.getTransactionCount({
+      address: this.address,
+      blockTag: 'pending',
+    });
+
+    return walletClient.sendTransaction({
+      to,
+      data,
+      nonce,
+      ...gasOverrides,
+    });
+  }
+
   async writeContractNow({ contract, abi, functionName, args }) {
     const walletClient = createPokerWalletClient(this.account);
     const { gasFee, gasOverrides } = await this.estimateContractGasFee({
@@ -154,10 +168,72 @@ export class OperatorAddress {
     return hash;
   }
 
+  async writeTransactionNow({ to, data, functionName, args }) {
+    const walletClient = createPokerWalletClient(this.account);
+    const gasOverrides = await getBufferedGasOverrides(publicPokerClient, {
+      address: to,
+      functionName,
+      args,
+      account: this.address,
+    });
+    const gasFee = gasOverrides.gas * (gasOverrides.maxFeePerGas ?? gasOverrides.gasPrice ?? 0n);
+    const balance = await publicPokerClient.getBalance({ address: this.address });
+
+    console.log('operator transaction prepared', {
+      operator: this.address,
+      contract: to,
+      functionName,
+      balanceWei: balance.toString(),
+      requiredGasWei: gasFee.toString(),
+      args,
+    });
+
+    if (balance < gasFee) {
+      await this.ensureGas(gasFee);
+    }
+
+    let hash;
+    try {
+      hash = await this.sendTransaction({
+        walletClient,
+        to,
+        data,
+        gasOverrides,
+      });
+    } catch (error) {
+      if (!isNonceTooLowError(error)) throw error;
+
+      await wait(NONCE_RETRY_DELAY_MS);
+      hash = await this.sendTransaction({
+        walletClient,
+        to,
+        data,
+        gasOverrides,
+      });
+    }
+
+    console.log('operator transaction sent', {
+      operator: this.address,
+      contract: to,
+      functionName,
+      hash,
+    });
+    return hash;
+  }
+
   async writeContract({ contract, abi, functionName, args }) {
     return enqueueOperatorWrite(this.address, () => this.writeContractNow({
       contract,
       abi,
+      functionName,
+      args,
+    }));
+  }
+
+  async writeTransaction({ to, data, functionName, args }) {
+    return enqueueOperatorWrite(this.address, () => this.writeTransactionNow({
+      to,
+      data,
       functionName,
       args,
     }));

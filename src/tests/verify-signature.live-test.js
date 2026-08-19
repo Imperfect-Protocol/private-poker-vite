@@ -4,12 +4,11 @@ import { test } from 'node:test';
 import { createPublicClient, http, isAddress, parseAbi } from 'viem';
 
 import {
-  CHAIN_ID,
-  CHAIN_KEY,
   CHAIN_RPC_URL,
   HASH_TO_CURVE_CONTRACT_ADDRESS,
+  liveDevnodeChain,
   VERIFY_SIGNATURE_CONTRACT_ADDRESS,
-} from '../lib/chain/index.js';
+} from './live-devnode-chain.js';
 import {
   bytesToHex,
   hexToBytes,
@@ -26,27 +25,13 @@ const HASH_TO_CURVE_ABI = parseAbi([
 ]);
 
 const VERIFY_SIGNATURE_ABI = parseAbi([
-  'function verifySignature(bytes digest, bytes aggregate_public_key, bytes aggregate_signature) returns (bool)',
+  'function verifySignature(bytes hashed_message, bytes aggregate_public_key, bytes aggregate_signature) returns (bool)',
 ]);
 
 const TEST_MESSAGES = [
   '0x12345678',
   bytesToHex(new TextEncoder().encode('private-poker/crumble/hash-to-curve/live-test'), { prefix: true }),
 ];
-
-function rpcUrl() {
-  if (CHAIN_RPC_URL === '/local-rpc') return 'http://localhost:8547';
-  return CHAIN_RPC_URL;
-}
-
-function testChain() {
-  return {
-    id: CHAIN_ID,
-    name: CHAIN_KEY,
-    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-    rpcUrls: { default: { http: [rpcUrl()] } },
-  };
-}
 
 function pointHex(point) {
   return bytesToHex(point.toRawBytes(true), { prefix: true });
@@ -65,7 +50,7 @@ function assertLiveContractsConfigured() {
 
 function publicClient() {
   assertLiveContractsConfigured();
-  return createPublicClient({ chain: testChain(), transport: http(rpcUrl()) });
+  return createPublicClient({ chain: liveDevnodeChain(), transport: http(CHAIN_RPC_URL) });
 }
 
 test('live hash_to_curve::toCurve matches crum_bls hash_to_curve', async () => {
@@ -119,11 +104,12 @@ test('live verify_signature::verifySignature matches crum_bls verify for known p
       make_public_key_from_compressed_slice(hexToBytes(testCase.publicKey)),
       make_signature_from_compressed_slice(hexToBytes(testCase.signature)),
     );
+    const hashedMessage = pointHex(hash_to_curve(testCase.message));
     const onChain = await client.readContract({
       address: VERIFY_SIGNATURE_CONTRACT_ADDRESS,
       abi: VERIFY_SIGNATURE_ABI,
       functionName: 'verifySignature',
-      args: [testCase.message, testCase.publicKey, testCase.signature],
+      args: [hashedMessage, testCase.publicKey, testCase.signature],
     });
 
     assert.equal(onChain, local, `verify_signature mismatch for ${testCase.label}`);

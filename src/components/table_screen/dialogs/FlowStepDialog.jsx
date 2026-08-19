@@ -67,8 +67,12 @@ export default function FlowStepDialog({
   error,
   isComplete,
   onOk,
+  okLabel = 'OK',
+  canOkOnError = false,
   showOk = true,
 }) {
+  const canOk = isComplete || (canOkOnError && Boolean(error));
+
   return (
     <TableDialogOverlay>
       <div className="bg-slate-950/50 p-6 border-b border-teal-500/20">
@@ -104,14 +108,16 @@ export default function FlowStepDialog({
           <button
             type="button"
             onClick={onOk}
-            disabled={!isComplete}
+            disabled={!canOk}
             className={`mt-2 py-3 rounded-lg font-black transition-colors uppercase text-xs tracking-widest ${
               isComplete
                 ? 'bg-emerald-400 text-slate-950 hover:bg-emerald-300 cursor-pointer shadow-[0_0_20px_rgba(52,211,153,0.3)]'
+                : canOk
+                  ? 'bg-red-500 text-white hover:bg-red-400 cursor-pointer shadow-[0_0_20px_rgba(239,68,68,0.25)]'
                 : 'bg-slate-800 text-slate-500 cursor-not-allowed'
             }`}
           >
-            OK
+            {okLabel}
           </button>
         )}
       </div>

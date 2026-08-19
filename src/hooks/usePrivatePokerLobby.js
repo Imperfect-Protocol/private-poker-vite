@@ -21,8 +21,8 @@ export const LOBBY_ABI = parseAbi([
 
     // Writes
     "function addLobby(uint256 id, uint256 gameType, uint256 flags, string name)",
-    "function createTable(uint256 lobby_id, uint256 table_id, string calldata name, uint256 buy_in, uint256 num_players, address player_address, address operator, bytes calldata annonce_public_key)",
-    "function joinTable(uint256 lobby_id, uint256 table_id, address player_address, address operator, bytes calldata annonce_public_key)",
+    "function createTable(uint256 lobby_id, uint256 table_id, string calldata name, uint256 buy_in, uint256 num_players, address player_address, bytes calldata annonce_public_key)",
+    "function joinTable(uint256 lobby_id, uint256 table_id, address player_address, bytes calldata annonce_public_key)",
     "function removeLobby(uint256 id)",
     "function removeTable(uint256 lobbyId, uint256 tableId)",
 
@@ -295,7 +295,7 @@ export function usePrivatePokerLobby({ onOperatorTopUp } = {}) {
     const createTable = async (lobbyId, tableId, name, buyIn, numPlayers, playerAddress, operator, publicKeyBytes = '0x', operatorPrivateKey = undefined) => {
         return await writeLobbyContract({
             functionName: 'createTable',
-            args: [BigInt(lobbyId), BigInt(tableId), name, BigInt(buyIn), BigInt(numPlayers), playerAddress, operator, publicKeyBytes],
+            args: [BigInt(lobbyId), BigInt(tableId), name, BigInt(buyIn), BigInt(numPlayers), playerAddress, publicKeyBytes],
             operatorPrivateKey,
         });
     };
@@ -310,7 +310,7 @@ export function usePrivatePokerLobby({ onOperatorTopUp } = {}) {
     ) => {
         return await writeLobbyContract({
             functionName: 'joinTable',
-            args: [BigInt(lobbyId), BigInt(tableId), playerAddress, operator, publicKeyBytes],
+            args: [BigInt(lobbyId), BigInt(tableId), playerAddress, publicKeyBytes],
             operatorPrivateKey,
         });
     };

@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
-import { encodeAbiParameters, keccak256, parseAbi } from 'viem';
-import { useConnection, useWriteContract } from 'wagmi';
+import { encodeAbiParameters, encodeFunctionData, keccak256, parseAbi } from 'viem';
+import { useConnection, useSendTransaction, useWriteContract } from 'wagmi';
 import { PRIVATE_POKER_CONTRACT_ADDRESS } from '../lib/chain/index.js';
 import { getBufferedGasOverrides } from '../lib/gas.js';
 import { publicPokerClient } from '../lib/publicPokerClient.js';
@@ -18,15 +18,15 @@ import {
 } from '../lib/crum_bls/index.js';
 import { holdemShowdown } from '../lib/crum_pkr/hand_evaluator.js';
 import { POKER_HOLDEM_ROUNDS } from '../lib/crum_pkr/index.js';
-import { toChipUnits } from '@/lib/constants';
+import { toChipUnits } from '../lib/constants.js';
 
 export const FINAL_VERIFICATION_SIGNATURE_SCHEME = 'BLS12-381-FINAL-HAND-DIGEST-SCALAR-V1';
 export const TABLE_AGGREGATE_PUBLIC_KEY_SIGNATURE_SCHEME = 'BLS12-381-TABLE-AGGREGATE-PUBLIC-KEY-V1';
 
 export const SETTLER_ABI = parseAbi([
   'function startHand(uint256 lobby_id, uint256 table_id)',
-  'function setTableAggregatePublicKey(uint256 lobby_id, uint256 table_id, bytes aggregate_public_key, bytes aggregate_signature)',
-  'function settleHand(uint256 lobby_id, uint256 table_id, uint256 hand_id, uint256 pot_size, uint256[] pot_split, uint256[] chips_balances, bytes digest, bytes aggregate_signature)',
+  'function setTableAggregatePublicKey(uint256 lobby_id, uint256 table_id, bytes aggregate_public_key)',
+  'function settleHand(uint256 lobby_id, uint256 table_id, uint256 hand_id, uint256 pot_size, uint256[] pot_split, uint256[] chips_balances, bytes digest, bytes aggregate_public_key) returns (uint256)',
 ]);
 
 const textEncoder = new TextEncoder();
@@ -53,6 +53,54 @@ function canonicalJson(value) {
 function ensureHexPrefix(value) {
   const normalized = String(value ?? '');
   return normalized.startsWith('0x') ? normalized : `0x${normalized}`;
+}
+
+function appendSignatureToCalldata(calldata, signature) {
+  return `${ensureHexPrefix(calldata)}${ensureHexPrefix(signature).slice(2)}`;
+}
+
+function tableAggregatePublicKeyCalldata({
+  lobbyId,
+  tableId,
+  aggregatePublicKey,
+}) {
+  return encodeFunctionData({
+    abi: SETTLER_ABI,
+    functionName: 'setTableAggregatePublicKey',
+    args: [
+      BigInt(lobbyId),
+      BigInt(tableId),
+      ensureHexPrefix(aggregatePublicKey),
+    ],
+  });
+}
+
+function settlementCalldata({
+  lobbyId,
+  tableId,
+  handId,
+  settlementMessage,
+  settlementDigest,
+  aggregatePublicKey,
+}) {
+  const potSplit = settlementMessage.pot_size_per_player ?? [];
+  const chipsBalances = settlementMessage.chips_balances ?? [];
+  const potSize = potSplit.reduce((sum, amount) => sum + BigInt(amount), 0n);
+
+  return encodeFunctionData({
+    abi: SETTLER_ABI,
+    functionName: 'settleHand',
+    args: [
+      BigInt(lobbyId ?? settlementMessage.lobby_id),
+      BigInt(tableId ?? settlementMessage.table_id),
+      BigInt(handId ?? settlementMessage.hand_id),
+      potSize,
+      potSplit.map((amount) => BigInt(amount)),
+      chipsBalances.map((amount) => BigInt(amount)),
+      ensureHexPrefix(settlementDigest),
+      ensureHexPrefix(aggregatePublicKey),
+    ],
+  });
 }
 
 function hexPoint(bytes) {
@@ -383,6 +431,7 @@ export function settlementContractArgs({
   if (!finalVerification?.complete) throw new Error('Final hand settlement is not complete.');
   if (!finalVerification?.settlementDigest) throw new Error('Missing final settlement digest.');
   if (!finalVerification?.aggregateSignature) throw new Error('Missing aggregate final settlement signature.');
+  if (!finalVerification?.aggregatePublicKey) throw new Error('Missing aggregate final settlement public key.');
 
   const potSplit = settlement.pot_size_per_player ?? [];
   const chipsBalances = settlement.chips_balances ?? [];
@@ -396,7 +445,7 @@ export function settlementContractArgs({
     potSplit.map((amount) => BigInt(amount)),
     chipsBalances.map((amount) => BigInt(amount)),
     ensureHexPrefix(finalVerification.settlementDigest),
-    ensureHexPrefix(finalVerification.aggregateSignature),
+    ensureHexPrefix(finalVerification.aggregatePublicKey),
   ];
 }
 
@@ -526,7 +575,6 @@ export function tableAggregatePublicKeyContractArgs({
     BigInt(lobbyId),
     BigInt(tableId),
     ensureHexPrefix(tableAggregateVerification.aggregatePublicKey),
-    ensureHexPrefix(tableAggregateVerification.aggregateSignature),
   ];
 }
 
@@ -563,7 +611,11 @@ export function assertValidTableAggregatePublicKeyVerification({
     throw new Error('Table aggregate public key preflight failed: digest mismatch.');
   }
 
-  const signaturePayload = hexToBytes(expectedDigest);
+  const signaturePayload = hexToBytes(tableAggregatePublicKeyCalldata({
+    lobbyId,
+    tableId,
+    aggregatePublicKey: expectedAggregatePublicKey,
+  }));
   const verified = aggregateSignatureShares({
     tableSeats,
     publicKeyShares,
@@ -654,7 +706,11 @@ export function buildNextTableAggregatePublicKeyVerification({
     tableId,
     aggregatePublicKey,
   });
-  const signaturePayload = hexToBytes(digest);
+  const signaturePayload = hexToBytes(tableAggregatePublicKeyCalldata({
+    lobbyId,
+    tableId,
+    aggregatePublicKey,
+  }));
   const verified = aggregateSignatureShares({
     tableSeats,
     publicKeyShares: nextPublicKeyShares,
@@ -766,18 +822,31 @@ export function buildNextFinalVerification({
     currentSeatNo,
     publicKey,
   });
+  const aggregatePublicKey = tableAggregatePublicKeyFromShares(nextPublicKeyShares);
+  const signaturePayload = hexToBytes(settlementCalldata({
+    lobbyId,
+    tableId,
+    handId,
+    settlementMessage: digestPayload.settlementMessage,
+    settlementDigest: digestPayload.settlementDigest,
+    aggregatePublicKey,
+  }));
+  const signedDigestPayload = {
+    ...digestPayload,
+    signaturePayload,
+  };
   const verified = aggregateSignatureShares({
     tableSeats,
     publicKeyShares: nextPublicKeyShares,
     signatureShares,
-    signaturePayload: digestPayload.signaturePayload,
+    signaturePayload,
   });
 
   const nextSeat = verified.signatureShares.length;
   const numPlayers = Number(hand?.current_state?.num_players ?? 0);
   if (nextSeat >= numPlayers) {
     return {
-      ...digestPayload,
+      ...signedDigestPayload,
       ...verified,
       publicKeyShares: nextPublicKeyShares,
       nextSeat,
@@ -787,7 +856,7 @@ export function buildNextFinalVerification({
   }
   if (Number(currentSeatNo) !== nextSeat) {
     return {
-      ...digestPayload,
+      ...signedDigestPayload,
       ...verified,
       publicKeyShares: nextPublicKeyShares,
       nextSeat,
@@ -799,7 +868,7 @@ export function buildNextFinalVerification({
   const finalPublicKey = publicKey ?? decodePublicKey(
     tablePublicKeyForSeat(tableSeats, nextPublicKeyShares, currentSeatNo),
   );
-  const signature = blsSignDigest(digestPayload.signaturePayload, signingKey);
+  const signature = blsSignDigest(signaturePayload, signingKey);
   const nextSignatureShares = [
     ...verified.signatureShares,
     {
@@ -813,11 +882,11 @@ export function buildNextFinalVerification({
     tableSeats,
     publicKeyShares: nextPublicKeyShares,
     signatureShares: nextSignatureShares,
-    signaturePayload: digestPayload.signaturePayload,
+    signaturePayload,
   });
 
   return {
-    ...digestPayload,
+    ...signedDigestPayload,
     ...nextVerified,
     publicKeyShares: nextPublicKeyShares,
     nextSeat: nextVerified.signatureShares.length,
@@ -829,7 +898,8 @@ export function buildNextFinalVerification({
 export function useFinalVerification({ onOperatorTopUp } = {}) {
   const { address } = useConnection();
   const { mutateAsync } = useWriteContract();
-  const { writeContractFromOperator } = useOperatorAddress({ onOperatorTopUp });
+  const { sendTransactionAsync } = useSendTransaction();
+  const { writeContractFromOperator, writeTransactionFromOperator } = useOperatorAddress({ onOperatorTopUp });
 
   const buildNextFinalVerificationCallback = useCallback((args) => (
     buildNextFinalVerification(args)
@@ -841,19 +911,36 @@ export function useFinalVerification({ onOperatorTopUp } = {}) {
   const writePrivatePokerContract = useCallback(async ({
     functionName,
     args,
+    signature,
     operatorPrivateKey,
   }) => {
     let hash;
     try {
-      if (operatorPrivateKey) {
-        console.info(`writeContract [from Operator] ${PRIVATE_POKER_CONTRACT_ADDRESS} ${functionName}:`, args);
-        hash = await writeContractFromOperator({
-          operatorPrivateKey,
-          contract: PRIVATE_POKER_CONTRACT_ADDRESS,
+      const data = signature
+        ? appendSignatureToCalldata(encodeFunctionData({
           abi: SETTLER_ABI,
           functionName,
           args,
-        });
+        }), signature)
+        : null;
+
+      if (operatorPrivateKey) {
+        console.info(`writeContract [from Operator] ${PRIVATE_POKER_CONTRACT_ADDRESS} ${functionName}:`, args);
+        hash = data
+          ? await writeTransactionFromOperator({
+            operatorPrivateKey,
+            to: PRIVATE_POKER_CONTRACT_ADDRESS,
+            data,
+            functionName,
+            args,
+          })
+          : await writeContractFromOperator({
+            operatorPrivateKey,
+            contract: PRIVATE_POKER_CONTRACT_ADDRESS,
+            abi: SETTLER_ABI,
+            functionName,
+            args,
+          });
         await waitForLoggedTransactionReceipt({
           hash,
           functionName,
@@ -874,13 +961,19 @@ export function useFinalVerification({ onOperatorTopUp } = {}) {
         })
         : {};
 
-      hash = await mutateAsync({
-        address: PRIVATE_POKER_CONTRACT_ADDRESS,
-        abi: SETTLER_ABI,
-        functionName,
-        args,
-        ...overrides,
-      });
+      hash = data
+        ? await sendTransactionAsync({
+          to: PRIVATE_POKER_CONTRACT_ADDRESS,
+          data,
+          ...overrides,
+        })
+        : await mutateAsync({
+          address: PRIVATE_POKER_CONTRACT_ADDRESS,
+          abi: SETTLER_ABI,
+          functionName,
+          args,
+          ...overrides,
+        });
       await waitForLoggedTransactionReceipt({
         hash,
         functionName,
@@ -899,7 +992,7 @@ export function useFinalVerification({ onOperatorTopUp } = {}) {
       }
       throw error;
     }
-  }, [address, mutateAsync, writeContractFromOperator]);
+  }, [address, mutateAsync, sendTransactionAsync, writeContractFromOperator, writeTransactionFromOperator]);
 
   const submitFinalHandOnChain = useCallback(async ({
     lobbyId,
@@ -918,6 +1011,7 @@ export function useFinalVerification({ onOperatorTopUp } = {}) {
     return writePrivatePokerContract({
       functionName: 'settleHand',
       args,
+      signature: finalVerification.aggregateSignature,
       operatorPrivateKey,
     });
   }, [writePrivatePokerContract]);
@@ -945,6 +1039,7 @@ export function useFinalVerification({ onOperatorTopUp } = {}) {
       const hash = await writePrivatePokerContract({
         functionName: 'setTableAggregatePublicKey',
         args,
+        signature: tableAggregateVerification.aggregateSignature,
         operatorPrivateKey,
       });
       return { hash, aggregatePublicKey: tableAggregateVerification.aggregatePublicKey };

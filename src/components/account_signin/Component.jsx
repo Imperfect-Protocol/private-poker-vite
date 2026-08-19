@@ -1,6 +1,7 @@
 "use client";
 
-import { useAccounts } from '@/hooks/useAccounts';
+import { ACCOUNT_STATUS, useAccounts } from '@/hooks/useAccounts';
+import FlowStepDialog from '@/components/table_screen/dialogs/FlowStepDialog';
 
 function formatAddress(address) {
   if (!address) return '';
@@ -60,21 +61,48 @@ function ProfileField({ label, value, field, type = 'text', editable, disabled =
   );
 }
 
+function AccountStatusPanel({ status }) {
+  const message = (() => {
+    if (status === ACCOUNT_STATUS.SUSPENDED) return 'Your account has been suspended.';
+    if (status === ACCOUNT_STATUS.BANNED) return 'Your account has been banned.';
+    if (status === ACCOUNT_STATUS.DELETED) return 'Your account has been deleted.';
+    return 'Your account needs to be verified. Send an email to imperfect-protocol@protonmail.com.';
+  })();
+
+  return (
+    <div>
+      <div className="border-b border-slate-800 pb-6">
+        <h2 className="text-2xl font-black uppercase tracking-tight text-white">Verification</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-400">
+          {message}
+        </p>
+      </div>
+      <div className="mt-6 rounded border border-cyan-500/25 bg-slate-950/70 px-4 py-4 text-sm font-semibold leading-7 text-cyan-100">
+        {message}
+      </div>
+    </div>
+  );
+}
+
 export default function AccountSignin() {
   const {
     accountSession,
+    accountStatus,
     error,
     handleProfileChange,
     handleProfileContinue,
     handleProfileEdit,
     handleProfileSave,
     handleContinue,
+    handleOperationDialogOk,
     handleSignin,
     isCheckingAccount,
     isSavingProfile,
     isSigningIn,
     isSubscribing,
+    isSubscriptionActive,
     isWalletConnected,
+    operationDialog,
     profile,
     profileMode,
     selectedTier,
@@ -85,8 +113,13 @@ export default function AccountSignin() {
     subscriptionStep,
     subscriptionTiers,
   } = useAccounts();
+  const operationDialogOkLabel = operationDialog?.error && !operationDialog?.isComplete
+    ? 'Close'
+    : 'Continue';
+  const isVerifiedSubscriptionProfile = accountStatus === ACCOUNT_STATUS.VERIFIED && !isSubscriptionActive;
 
   return (
+    <>
     <main className="min-h-screen bg-slate-950 px-4 py-10 md:px-12">
       <div className="mx-auto grid min-h-[calc(100vh-7rem)] w-full max-w-6xl grid-cols-1 gap-8 lg:grid-cols-[0.88fr_1.12fr] lg:items-center">
         <section className="relative overflow-hidden rounded border border-teal-500/15 bg-slate-900/70 p-8 shadow-2xl">
@@ -112,6 +145,9 @@ export default function AccountSignin() {
               </div>
               <div className={`border-l-2 pl-4 ${step === 'profile' ? 'border-teal-400 text-teal-300' : 'border-teal-900 text-slate-500'}`}>
                 Profile
+              </div>
+              <div className={`border-l-2 pl-4 ${step === 'status' ? 'border-teal-400 text-teal-300' : 'border-teal-900 text-slate-500'}`}>
+                Verification
               </div>
               <div className={`border-l-2 pl-4 ${step === 'subscription' ? 'border-teal-400 text-teal-300' : 'border-teal-900 text-slate-500'}`}>
                 Subscription
@@ -171,6 +207,8 @@ export default function AccountSignin() {
                 {!isWalletConnected ? 'Connect Wallet' : isSigningIn ? 'Signing...' : 'Sign In'}
               </button>
             </div>
+          ) : step === 'status' ? (
+            <AccountStatusPanel status={accountStatus} />
           ) : step === 'profile' ? (
             <div>
               <div className="flex flex-col gap-4 border-b border-slate-800 pb-6 md:flex-row md:items-end md:justify-between">
@@ -180,7 +218,7 @@ export default function AccountSignin() {
                     Display name stays public. Contact and legal details are not stored in this version.
                   </p>
                 </div>
-                {profileMode === 'view' && (
+                {profileMode === 'view' && !isVerifiedSubscriptionProfile && (
                   <button
                     type="button"
                     onClick={handleProfileEdit}
@@ -240,7 +278,7 @@ export default function AccountSignin() {
                   disabled={isSavingProfile}
                   className="mt-6 w-full cursor-pointer rounded border border-teal-400 bg-teal-400 px-6 py-4 font-black uppercase tracking-[0.18em] text-slate-950 transition-all hover:bg-teal-300 disabled:cursor-wait disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500"
                 >
-                  {isSavingProfile ? 'Saving...' : 'Save Profile'}
+                  {isSavingProfile ? 'Saving...' : 'Continue'}
                 </button>
               ) : (
                 <button
@@ -298,5 +336,18 @@ export default function AccountSignin() {
         </section>)}
       </div>
     </main>
+    {operationDialog && (
+      <FlowStepDialog
+        title={operationDialog.title}
+        description={operationDialog.description}
+        steps={operationDialog.steps}
+        error={operationDialog.error}
+        isComplete={operationDialog.isComplete}
+        onOk={handleOperationDialogOk}
+        okLabel={operationDialogOkLabel}
+        canOkOnError
+      />
+    )}
+    </>
   );
 }

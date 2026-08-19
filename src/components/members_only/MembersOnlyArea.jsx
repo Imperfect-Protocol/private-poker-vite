@@ -1,6 +1,23 @@
 import { useNavigate } from 'react-router-dom';
 
-export default function MembersOnlyArea() {
+const ACCOUNT_STATUS = {
+  UNVERIFIED: 1n,
+  SUSPENDED: 4n,
+  BANNED: 8n,
+  DELETED: 16n,
+};
+
+function accessMessage(accountStatus) {
+  if (accountStatus === ACCOUNT_STATUS.SUSPENDED) return 'Your account has been suspended.';
+  if (accountStatus === ACCOUNT_STATUS.BANNED) return 'Your account has been banned.';
+  if (accountStatus === ACCOUNT_STATUS.DELETED) return 'Your account has been deleted.';
+  if (accountStatus === ACCOUNT_STATUS.UNVERIFIED) {
+    return 'Your account needs to be verified. Send an email to imperfect-protocol@protonmail.com.';
+  }
+  return 'Sign in with a verified account and active subscription to enter this area.';
+}
+
+export default function MembersOnlyArea({ accountStatus = 0n }) {
   const navigate = useNavigate();
 
   return (
@@ -14,7 +31,7 @@ export default function MembersOnlyArea() {
           Members Only
         </h1>
         <p className="mx-auto mt-5 max-w-md text-sm font-semibold leading-7 text-red-200/60">
-          Connect a funded member wallet to enter this area.
+          {accessMessage(accountStatus)}
         </p>
         <button
           type="button"
