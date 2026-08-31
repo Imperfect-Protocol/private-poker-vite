@@ -21,6 +21,8 @@ export const CHIPS_DECIMALS = 6;
 export const CHIPS_SCALE = 1_000_000n;
 export const OPERATOR_GAS_TOPUP_FACTOR = 10n;
 export const OPERATOR_GAS_MAX_TOPUP = 1_000_000_000_000_000_000n;
+export const PRIVATE_POKER_DEMO_DISCLAIMER =
+    "Disclaimer: This is a tech demo of the Private Poker running on a test network. No real money is involved, no real-money gambling is taking place, and the application is not being presented as a production gambling service. The demo is intended for technical discussion, testing, and project sharing within developer, founder, Web3, and Arbitrum ecosystem circles. It is not intended for paid advertising, gambling promotion, gambling user acquisition, or consumer-facing marketing. The purpose is to demonstrate underlying technology: peer-to-peer networking, WebRTC, cryptography, smart contracts, blockchain settlement, and protocol design.";
 
 export const SUBSCRIPTION_TIERS = [
     {
