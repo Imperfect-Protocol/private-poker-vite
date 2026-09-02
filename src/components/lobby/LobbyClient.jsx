@@ -2,7 +2,7 @@
 
 import DemoDisclaimer from '@/components/demo_disclaimer/DemoDisclaimer';
 import GameLobby from '@/components/lobby/GameLobby';
-import { useLobby } from '@/hooks/useLobby';
+import { useLobby } from 'privatepoker-hooks/hooks/useLobby';
 
 export default function LobbyClient({ id }) {
   const { tables, lobbyInfo, userTables, isLoading } = useLobby(id);

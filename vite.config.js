@@ -6,7 +6,7 @@ import tailwindcss from '@tailwindcss/vite'
 import { standalone } from 'vite-plugin-standalone'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { devProxyForSelectedConfig } from './src/lib/proxy/dev.js'
+import { devProxyForSelectedConfig } from 'privatepoker-hooks/lib/proxy/dev.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -37,6 +37,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      'privatepoker-hooks': path.resolve(__dirname, '../privatepoker-hooks/src'),
       '@': path.resolve(__dirname, './src'),
       'next/link': path.resolve(__dirname, './src/shims/next-link.jsx'),
       'next/navigation': path.resolve(__dirname, './src/shims/next-navigation.js'),

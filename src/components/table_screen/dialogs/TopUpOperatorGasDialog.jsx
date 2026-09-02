@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import TableDialogOverlay from '@/components/dialog/TableDialogOverlay';
 import Slider from '@/components/slider/Component';
-import { OPERATOR_GAS_MAX_TOPUP } from '@/lib/constants';
+import { OPERATOR_GAS_MAX_TOPUP } from 'privatepoker-hooks/lib/constants';
 
 function formatGwei(value) {
   const wei = BigInt(value ?? 0n);

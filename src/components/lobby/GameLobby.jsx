@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState, useMemo } from 'react';
-import { useAccountSession } from '@/contexts/AccountSessionContext.jsx';
-import { useRtcSessionPool } from '@/hooks/useRtcSessionPool';
+import { useAccountSession } from 'privatepoker-hooks/contexts/AccountSessionContext.jsx';
+import { useRtcSessionPool } from 'privatepoker-hooks/hooks/useRtcSessionPool';
 
 const formatSeat = (value) => (value ? value.slice(2, 4).toUpperCase() : '??');
 

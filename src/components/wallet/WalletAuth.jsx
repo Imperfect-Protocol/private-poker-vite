@@ -4,8 +4,8 @@ import { useMemo, useState, useEffect } from 'react'
 import { useAppKitAccount, useAppKit } from '@reown/appkit/react'
 import { useDisconnect, useConnection } from 'wagmi'
 import { formatUnits, isAddress, parseAbi } from 'viem';
-import { CHIPS_CONTRACT_ADDRESS, PPDC_CONTRACT_ADDRESS } from '@/lib/chain';
-import { useChainPolling } from '@/hooks/useChainPolling';
+import { CHIPS_CONTRACT_ADDRESS, PPDC_CONTRACT_ADDRESS } from 'privatepoker-hooks/lib/chain';
+import { useChainPolling } from 'privatepoker-hooks/hooks/useChainPolling';
 
 const PPDC = 'PPDC';
 

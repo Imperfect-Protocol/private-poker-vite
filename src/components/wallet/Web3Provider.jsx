@@ -4,9 +4,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createAppKit } from '@reown/appkit/react'
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi'
 import { WagmiProvider, http } from 'wagmi'
-import { CHAIN_ID, CHAIN_RPC_URL, CHAIN_STALE_TIME } from '@/lib/chain'
+import { CHAIN_ID, CHAIN_RPC_URL, CHAIN_STALE_TIME } from 'privatepoker-hooks/lib/chain'
 import { arbitrumSepolia } from '@reown/appkit/networks'
-import { nitroDevNode } from '@/lib/nitroDevNode'
+import { nitroDevNode } from 'privatepoker-hooks/lib/nitroDevNode'
 
 function getNetwork() {
   if (CHAIN_ID === arbitrumSepolia.id) return arbitrumSepolia;

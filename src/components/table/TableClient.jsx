@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useTable } from '@/hooks/useTable';
-import { usePokerTable } from '@/hooks/usePokerTable';
+import { useTable } from 'privatepoker-hooks/hooks/useTable';
+import { usePokerTable } from 'privatepoker-hooks/hooks/usePokerTable';
 import ActiveTableView from '@/components/table/ActiveTableView';
 import BuyInDialog from '@/components/table_screen/dialogs/BuyInDialog';
 import JoinTableFlowDialog from '@/components/table_screen/dialogs/JoinTableFlowDialog';
@@ -10,10 +10,10 @@ import ReJoinTableFlowDialog from '@/components/table_screen/dialogs/ReJoinTable
 import MediaDataChannelDialog from '@/components/table_screen/dialogs/MediaDataChannelDialog';
 import TerminalResultDialog from '@/components/table_screen/dialogs/TerminalResultDialog';
 import TopUpOperatorGasDialog from '@/components/table_screen/dialogs/TopUpOperatorGasDialog';
-import { useAccounts } from '@/hooks/useAccounts';
-import { useWebcam } from '@/hooks/useWebcam';
-import { submitConsoleLine } from '@/lib/crum_pkr';
-import { emitLobbyTablesChanged } from '@/lib/lobbyEvents';
+import { useAccounts } from 'privatepoker-hooks/hooks/useAccounts';
+import { useWebcam } from 'privatepoker-hooks/hooks/useWebcam';
+import { submitConsoleLine } from 'privatepoker-hooks/lib/crum_pkr';
+import { emitLobbyTablesChanged } from 'privatepoker-hooks/lib/lobbyEvents';
 
 const readCreatedTableSnapshot = (tableId) => {
   if (typeof window === 'undefined') return null;
