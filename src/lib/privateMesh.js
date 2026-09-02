@@ -145,6 +145,7 @@ async function sendAndPoll(session) {
           inboundMessage = {
             type: 'p2p-route-available',
             target: normalizeAddress(msg.target),
+            flowId: msg.flowId,
             status: msg.status,
             lobbyId: msg.lobbyId,
             tableId: msg.tableId,

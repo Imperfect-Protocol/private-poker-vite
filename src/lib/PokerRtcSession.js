@@ -1532,7 +1532,7 @@ export class PokerRtcSession {
 
       if (status === 'connect_through_peers') {
         this.emitActivity(`${formatSeat(target)} :: Reachable via P2P Gossip`);
-        await this.triggerOfferForPeer(target, null, { transport: 'gossip' });
+        await this.triggerOfferForPeer(target, null, { transport: 'gossip', flowId: signal.flowId });
 
       } else if (status === 'cut') {
         this.emitActivity(`${formatSeat(target)} !! P2P Route Cut`);
@@ -1575,7 +1575,10 @@ export class PokerRtcSession {
   }
 
   async handleSignal(signalData, enqueue = null) {
-    if (signalData?.type === 'trigger-offer' || signalData?.type === 'p2p-route-available') {
+    if (
+      signalData?.type === 'trigger-offer'
+      || signalData?.type === 'p2p-route-available'
+    ) {
       await this.handleIncomingSignal(
         signalData.recipient ?? this.config.playerAddress,
         signalData,
