@@ -1,6 +1,8 @@
 import { CHAIN_RPC_URL } from '../chain/index.js';
 import { MESH_ENDPOINTS } from '../mesh/index.js';
 
+const MESH_PORT = process.env.MESH_PORT ?? '3001';
+
 export const DEV_PROXY = {
   '/local-rpc': {
     target: 'http://localhost:8547',
@@ -8,7 +10,7 @@ export const DEV_PROXY = {
     rewrite: (path) => path.replace(/^\/local-rpc$/, '/'),
   },
   '/local-mesh': {
-    target: 'http://localhost:3001',
+    target: `http://localhost:${MESH_PORT}`,
     changeOrigin: true,
     rewrite: (path) => path.replace(/^\/local-mesh/, ''),
   },

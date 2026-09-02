@@ -49,6 +49,7 @@ export function usePrivatePokerSignal({ playerAddress } = {}) {
       kind,
       lobbyId: lobbyId?.toString?.() ?? String(lobbyId),
       tableId: tableId?.toString?.() ?? String(tableId),
+      flowId: options.flowId ?? null,
     }));
 
     console.log('[RTC signal] Private Mesh publish', {

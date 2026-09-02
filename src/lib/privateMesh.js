@@ -2,6 +2,7 @@ import { MESH_ENDPOINTS } from '@/lib/mesh';
 
 const cleanUrl = (value) => String(value ?? '').trim().replace(/\/+$/, '');
 const stripHexPrefix = (value) => String(value ?? '').replace(/^0x/i, '');
+const activePollSessions = new Map();
 
 const normalizeAddress = (value) => {
   const hex = stripHexPrefix(value).toLowerCase();
@@ -26,30 +27,53 @@ function getRandomMeshEndpoint() {
   return endpoints[randomIndex].url;
 }
 
-async function sendAndPoll(url, lobbyId, tableId, peer, messages, callback) {
-  const queue = [...messages];
-  let keepAlive = true;
-  let sagaId = '';
+function pollSessionKey(lobbyId, tableId, peer) {
+  return `${String(lobbyId)}:${String(tableId)}:${normalizeAddress(peer)}`;
+}
+
+function createPollSession({ url, lobbyId, tableId, peer, callback }) {
+  const session = {
+    url,
+    lobbyId: String(lobbyId),
+    tableId: String(tableId),
+    peer: normalizeAddress(peer),
+    callback,
+    queue: [],
+    sagaId: '',
+    currentAbort: null,
+    stopped: false,
+  };
+
+  session.enqueue = (message) => {
+    if (!message || session.stopped) return;
+    session.queue.push(message);
+    session.currentAbort?.abort();
+  };
+
+  return session;
+}
+
+async function sendAndPoll(session) {
+  const { url, lobbyId, tableId, peer } = session;
 
   const attachSagaId = (message) => {
-    if (!sagaId || !message || typeof message !== 'object') return message;
+    if (!session.sagaId || !message || typeof message !== 'object') return message;
     if (Array.isArray(message)) return message.map(attachSagaId);
     return {
       ...message,
-      saga_id: message.saga_id ?? message.sagaId ?? sagaId,
+      saga_id: message.saga_id ?? message.sagaId ?? session.sagaId,
     };
   };
 
   const enqueueFn = (m) => {
     if (m) {
-      queue.push(async () => attachSagaId(typeof m === 'function' ? await m() : await m));
+      session.enqueue(async () => attachSagaId(typeof m === 'function' ? await m() : await m));
     }
   };
 
   try {
-    while (keepAlive || queue.length > 0) {
-      keepAlive = false;
-      const rawOutbound = queue.splice(0);
+    while (!session.stopped) {
+      const rawOutbound = session.queue.splice(0);
       const outbound = [];
 
       for (const item of rawOutbound) {
@@ -64,17 +88,30 @@ async function sendAndPoll(url, lobbyId, tableId, peer, messages, callback) {
         }
       }
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          lobbyId: String(lobbyId),
-          tableId: String(tableId),
-          peer: normalizeAddress(peer),
-          saga_id: sagaId,
-          messages: outbound,
-        }),
-      });
+      const abort = new AbortController();
+      session.currentAbort = abort;
+      let response;
+      try {
+        response = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          signal: abort.signal,
+          body: JSON.stringify({
+            lobbyId,
+            tableId,
+            peer,
+            saga_id: session.sagaId,
+            messages: outbound,
+          }),
+        });
+      } catch (error) {
+        if (error.name === 'AbortError') continue;
+        throw error;
+      } finally {
+        if (session.currentAbort === abort) {
+          session.currentAbort = null;
+        }
+      }
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -83,7 +120,7 @@ async function sendAndPoll(url, lobbyId, tableId, peer, messages, callback) {
       const body = await response.json().catch(() => null);
       const responseSagaId = body?.saga_id ?? body?.sagaId;
       if (typeof responseSagaId === 'string' && responseSagaId) {
-        sagaId = responseSagaId;
+        session.sagaId = responseSagaId;
       }
       const inboundMessages = Array.isArray(body?.messages) ? body.messages : [];
 
@@ -91,7 +128,6 @@ async function sendAndPoll(url, lobbyId, tableId, peer, messages, callback) {
         let inboundMessage = msg;
 
         if (msg.type === 'keep-alive') {
-          keepAlive = true;
           continue;
         }
 
@@ -99,10 +135,11 @@ async function sendAndPoll(url, lobbyId, tableId, peer, messages, callback) {
           inboundMessage = {
             type: 'trigger-offer',
             target: normalizeAddress(msg.target),
+            flowId: msg.flowId,
             lobbyId: msg.lobbyId,
             tableId: msg.tableId,
             recipient: normalizeAddress(peer),
-            saga_id: msg.saga_id ?? msg.sagaId ?? sagaId,
+            saga_id: msg.saga_id ?? msg.sagaId ?? session.sagaId,
           };
         } else if (msg.type === 'p2p-route-available') {
           inboundMessage = {
@@ -112,20 +149,22 @@ async function sendAndPoll(url, lobbyId, tableId, peer, messages, callback) {
             lobbyId: msg.lobbyId,
             tableId: msg.tableId,
             recipient: normalizeAddress(peer),
-            saga_id: msg.saga_id ?? msg.sagaId ?? sagaId,
+            saga_id: msg.saga_id ?? msg.sagaId ?? session.sagaId,
           };
         } else if (msg.signal) {
           inboundMessage = msg.signal;
         }
 
-        if (typeof callback === 'function') {
-          await callback(inboundMessage, enqueueFn);
+        if (typeof session.callback === 'function') {
+          await session.callback(inboundMessage, enqueueFn);
         }
       }
     }
-    console.debug(`[privateMesh] poll thread existed for: ${lobbyId}:${tableId}`);
   } catch (error) {
     console.warn('[privateMesh] poll thread error:', error.message);
+  } finally {
+    session.stopped = true;
+    console.debug(`[privateMesh] poll thread exited for: ${lobbyId}:${tableId}`);
   }
 }
 
@@ -137,19 +176,33 @@ export async function announcePrivateMesh({ originAddress, lobbyId, tableId, loo
   if (!url) return;
 
   const targets = lookingFor.map(normalizeAddress).filter(Boolean);
+  const message = {
+    type: 'bootstrap-announce',
+    peer,
+    lookingFor: targets,
+  };
+  const key = pollSessionKey(lobbyId, tableId, peer);
+  const existing = activePollSessions.get(key);
+  if (existing && !existing.stopped) {
+    existing.callback = callback;
+    existing.enqueue(message);
+    return;
+  }
 
-  void sendAndPoll(
+  const session = createPollSession({
     url,
     lobbyId,
     tableId,
     peer,
-    [{
-      type: 'bootstrap-announce',
-      peer,
-      lookingFor: targets,
-    }],
     callback,
-  );
+  });
+  activePollSessions.set(key, session);
+  session.enqueue(message);
+  void sendAndPoll(session).finally(() => {
+    if (activePollSessions.get(key) === session) {
+      activePollSessions.delete(key);
+    }
+  });
 }
 
 export function publishPrivateMesh(signals, enqueue) {

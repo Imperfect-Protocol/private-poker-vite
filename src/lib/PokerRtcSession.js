@@ -1309,6 +1309,7 @@ export class PokerRtcSession {
       playerAddress,
       operatorPrivateKey: this.config.operatorPrivateKey,
       signalType: signal.type,
+      flowId: signal.flowId,
       enqueue,
     });
 
@@ -1337,7 +1338,7 @@ export class PokerRtcSession {
     return delivered;
   }
 
-  async triggerOfferForPeer(peerAddress, enqueue = null, { transport = 'mesh' } = {}) {
+  async triggerOfferForPeer(peerAddress, enqueue = null, { transport = 'mesh', flowId = null } = {}) {
     const peerKey = normalizeAddress(peerAddress);
     const subscription = this.getSubscription(peerAddress, RTC_LINK.INBOUND);
     const pubKey = subscription?.publicAnnounceKey ?? this.getPlayerPublicKey(peerAddress);
@@ -1352,10 +1353,10 @@ export class PokerRtcSession {
     await this.executeSendOffer({
       playerAddress: peerAddress,
       annoncePublicKey: pubKey,
-    }, { enqueue, transport });
+    }, { enqueue, transport, flowId });
   }
 
-  async executeSendOffer(peer, { enqueue = null, transport = 'mesh' } = {}) {
+  async executeSendOffer(peer, { enqueue = null, transport = 'mesh', flowId = null } = {}) {
     const { playerAddress, publicKey, tableId, lobbyId } = this.config;
     const peerPubKey = peer?.annoncePublicKey ?? peer?.announcePublicKey;
 
@@ -1395,6 +1396,7 @@ export class PokerRtcSession {
         type: 'offer',
         direction: RTC_LINK.INBOUND,
         sdp: pc.localDescription.sdp,
+        flowId,
       };
 
       if (transport === 'gossip') {
@@ -1468,7 +1470,7 @@ export class PokerRtcSession {
     this.schedulePeerDiscovery();
   }
 
-  async sendAccept(peerAddress, peerPubKey, offerSdp, direction = RTC_LINK.OUTBOUND, { viaDataChannel = false, viaPool = false, enqueue = null } = {}) {
+  async sendAccept(peerAddress, peerPubKey, offerSdp, direction = RTC_LINK.OUTBOUND, { viaDataChannel = false, viaPool = false, enqueue = null, flowId = null } = {}) {
     const peerKey = normalizeAddress(peerAddress);
     const existing = this.getSubscription(peerAddress, direction);
     const publicAnnounceKey = peerPubKey ?? existing?.publicAnnounceKey ?? this.getPlayerPublicKey(peerAddress);
@@ -1493,6 +1495,7 @@ export class PokerRtcSession {
       type: 'accept',
       direction,
       sdp: pc.localDescription.sdp,
+      flowId,
     };
 
     if (viaDataChannel) {
@@ -1518,7 +1521,7 @@ export class PokerRtcSession {
       const target = normalizeAddress(signal.target);
       const transport = signal.transport === 'gossip' ? 'gossip' : 'mesh';
       this.logActivity(`received trigger-offer for target ${formatPeer(target)} via ${transport}`);
-      await this.triggerOfferForPeer(target, enqueue, { transport });
+      await this.triggerOfferForPeer(target, enqueue, { transport, flowId: signal.flowId });
       return;
     }
 
@@ -1548,7 +1551,7 @@ export class PokerRtcSession {
         peerPubKey,
         signal.sdp,
         viaDataChannel ? receivedDirection : oppositeLink(signal.direction ?? RTC_LINK.INBOUND),
-        { viaDataChannel, viaPool, enqueue },
+        { viaDataChannel, viaPool, enqueue, flowId: signal.flowId },
       );
       return;
     }
