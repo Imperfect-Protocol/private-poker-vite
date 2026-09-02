@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAccountSession } from '@/contexts/AccountSessionContext.jsx';
-import { usePrivatePokerLobby } from '@/hooks/usePrivatePokerLobby';
+import {
+  decodePlayerTables,
+  decodeTableDetailBlob,
+  LOBBY_ABI,
+} from '@/hooks/usePrivatePokerLobby';
 import { useTokenRing } from '@/hooks/useTokenRing.js';
-import { CHAIN_POLLING_INTERVAL } from '@/lib/chain';
+import { useChainPolling } from '@/hooks/useChainPolling';
+import { CHAIN_POLLING_INTERVAL, LOBBY_CONTRACT_ADDRESS } from '@/lib/chain';
 import { getBlindsForBuyin, getStakesLabel } from '@/lib/stakes';
 
 const mapTableDetail = (detail) => ({
@@ -62,7 +67,6 @@ export function useTable({
 } = {}) {
   const { accountSession } = useAccountSession();
   const playerAddress = accountSession?.walletAddress;
-  const { getTableDetail, getPlayerTables } = usePrivatePokerLobby();
   const [liveTableData, setLiveTableData] = useState(initialTableData);
   const [isLoading, setIsLoading] = useState(!initialTableData);
   const [isSeated, setIsSeated] = useState(initialIsSeated);
@@ -188,59 +192,79 @@ export function useTable({
   }, [networkEnabled, previousSeat?.playerAddress, subscribeToPreviousSeat, subscriptionKey]);
 
   useEffect(() => {
-    let cancelled = false;
-    let pollTimer = null;
-    let inFlight = false;
+    if (!lobbyId || !tableId) setIsLoading(false);
+  }, [lobbyId, tableId]);
 
-    const loadTable = async ({ silent = false } = {}) => {
-      if (inFlight || !lobbyId || !tableId) return;
-      inFlight = true;
-
-      try {
-        if (!silent && !liveTableData) setIsLoading(true);
-        const detail = await getTableDetail(lobbyId, tableId);
-        if (cancelled) return;
-
-        setLiveTableData((current) => ({
-          ...mapTableDetail(detail),
-          current_hand: {
-            ...mapTableDetail(detail).current_hand,
-            ...current?.current_hand,
-          },
-        }));
-
-        if (playerAddress) {
-          const userTables = await getPlayerTables(playerAddress);
-          if (cancelled) return;
-          setIsSeated(userTables.includes(tableId.toString()));
-        } else {
-          setIsSeated(null);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.error('Failed to load table:', error);
-        }
-      } finally {
-        if (!cancelled && !silent) setIsLoading(false);
-        inFlight = false;
+  const tableDetailRequest = useMemo(() => (
+    lobbyId && tableId
+      ? {
+        key: `table-detail:${lobbyId}:${tableId}:${refreshTrigger}`,
+        address: LOBBY_CONTRACT_ADDRESS,
+        abi: LOBBY_ABI,
+        functionName: 'getTableDetail',
+        args: [BigInt(lobbyId), BigInt(tableId)],
       }
-    };
+      : null
+  ), [lobbyId, refreshTrigger, tableId]);
 
-    const poll = async () => {
-      await loadTable({ silent: true });
-      if (!cancelled) {
-        pollTimer = setTimeout(poll, CHAIN_POLLING_INTERVAL);
+  const playerTablesRequest = useMemo(() => (
+    playerAddress && tableId
+      ? {
+        key: `player-tables:${normalizeAddress(playerAddress)}:${refreshTrigger}`,
+        address: LOBBY_CONTRACT_ADDRESS,
+        abi: LOBBY_ABI,
+        functionName: 'getPlayerTables',
+        args: [playerAddress],
       }
-    };
+      : null
+  ), [playerAddress, refreshTrigger, tableId]);
 
-    loadTable();
-    pollTimer = setTimeout(poll, CHAIN_POLLING_INTERVAL);
+  const tableDetailPoll = useChainPolling(tableDetailRequest, {
+    enabled: Boolean(tableDetailRequest),
+    intervalMs: CHAIN_POLLING_INTERVAL,
+  });
+  const playerTablesPoll = useChainPolling(playerTablesRequest, {
+    enabled: Boolean(playerTablesRequest),
+    intervalMs: CHAIN_POLLING_INTERVAL,
+  });
 
-    return () => {
-      cancelled = true;
-      clearTimeout(pollTimer);
-    };
-  }, [playerAddress, lobbyId, refreshTrigger, tableId]);
+  useEffect(() => {
+    if (tableDetailPoll.error) {
+      console.error('Failed to load table:', tableDetailPoll.error);
+      setIsLoading(false);
+      return;
+    }
+
+    if (!tableDetailPoll.hasResolved) return;
+
+    const detail = decodeTableDetailBlob(tableDetailPoll.data);
+    const mappedDetail = mapTableDetail(detail);
+    setLiveTableData((current) => ({
+      ...mappedDetail,
+      current_hand: {
+        ...mappedDetail.current_hand,
+        ...current?.current_hand,
+      },
+    }));
+    setIsLoading(false);
+  }, [tableDetailPoll.data, tableDetailPoll.error, tableDetailPoll.hasResolved]);
+
+  useEffect(() => {
+    if (!playerAddress || !tableId) {
+      setIsSeated(null);
+      return;
+    }
+
+    if (playerTablesPoll.error) {
+      console.error('Failed to load player tables:', playerTablesPoll.error);
+      return;
+    }
+
+    if (!playerTablesPoll.hasResolved) return;
+
+    const userTables = decodePlayerTables(playerTablesPoll.data);
+    setIsSeated(userTables.includes(tableId.toString()));
+  }, [playerAddress, playerTablesPoll.data, playerTablesPoll.error, playerTablesPoll.hasResolved, tableId]);
 
   useEffect(() => {
     seats.forEach((seat) => {

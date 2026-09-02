@@ -31,6 +31,124 @@ export const LOBBY_ABI = parseAbi([
     "event TableCreated(uint256 id, uint256 lobby_id, string name, uint256 buy_in)"
 ]);
 
+export const decodeLobbyBlob = (blob) => {
+    const [lobby] = decodeAbiParameters(
+        [{
+            type: 'tuple',
+            components: [
+                { name: 'lobbyId', type: 'uint256' },
+                { name: 'lobbyGameType', type: 'uint256' },
+                { name: 'lobbyFlags', type: 'uint256' },
+                { name: 'lobbyTableCount', type: 'uint256' },
+                { name: 'lobbyPlayerCount', type: 'uint256' },
+                { name: 'lobbyTotalVolume', type: 'uint256' },
+                { name: 'lobbyName', type: 'string' }
+            ]
+        }],
+        blob
+    );
+
+    return {
+        id: lobby.lobbyId.toString(),
+        gameType: Number(lobby.lobbyGameType),
+        flags: Number(lobby.lobbyFlags),
+        tableCount: Number(lobby.lobbyTableCount),
+        playerCount: Number(lobby.lobbyPlayerCount),
+        totalVolume: lobby.lobbyTotalVolume.toString(),
+        name: lobby.lobbyName,
+    };
+};
+
+export const decodeTableBlob = (blob) => {
+    const [table] = decodeAbiParameters(
+        [{
+            type: 'tuple',
+            components: [
+                { name: 'tableId', type: 'uint256' },
+                { name: 'tableFlags', type: 'uint256' },
+                { name: 'tableBuyin', type: 'uint256' },
+                { name: 'tablePlayerCount', type: 'uint256' },
+                { name: 'tableTotalBuyin', type: 'uint256' },
+                { name: 'tableCurrentHand', type: 'uint256' },
+                { name: 'tableName', type: 'string' }
+            ]
+        }],
+        blob
+    );
+
+    return {
+        id: table.tableId.toString(),
+        flags: Number(table.tableFlags),
+        buyIn: fromChipUnits(table.tableBuyin),
+        playerCount: Number(table.tablePlayerCount),
+        totalBuyIn: fromChipUnits(table.tableTotalBuyin),
+        currentHand: Number(table.tableCurrentHand),
+        name: table.tableName,
+    };
+};
+
+const tableDetailShape = (includeAnnoncePublicKey) => [
+    {
+        type: 'tuple',
+        components: [
+            {
+                name: 'info',
+                type: 'tuple',
+                components: [
+                    { name: 'tableId', type: 'uint256' },
+                    { name: 'tableFlags', type: 'uint256' },
+                    { name: 'tableBuyin', type: 'uint256' },
+                    { name: 'tablePlayerCount', type: 'uint256' },
+                    { name: 'tableTotalBuyin', type: 'uint256' },
+                    { name: 'tableCurrentHand', type: 'uint256' },
+                    { name: 'tableName', type: 'string' }
+                ]
+            },
+            {
+                name: 'players',
+                type: 'tuple[]',
+                components: [
+                    { name: 'playerAddress', type: 'address' },
+                    { name: 'operator', type: 'address' },
+                    { name: 'playerChips', type: 'uint256' },
+                    ...(includeAnnoncePublicKey
+                        ? [{ name: 'playerAnnoncePublicKey', type: 'bytes' }]
+                        : [])
+                ]
+            }
+        ]
+    }
+];
+
+export const decodeTableDetailBlob = (blob) => {
+    let detail;
+    try {
+        [detail] = decodeAbiParameters(tableDetailShape(true), blob);
+    } catch {
+        [detail] = decodeAbiParameters(tableDetailShape(false), blob);
+    }
+
+    return {
+        info: {
+            id: detail.info.tableId.toString(),
+            flags: Number(detail.info.tableFlags),
+            buyIn: fromChipUnits(detail.info.tableBuyin),
+            playerCount: Number(detail.info.tablePlayerCount),
+            totalBuyIn: fromChipUnits(detail.info.tableTotalBuyin),
+            currentHand: Number(detail.info.tableCurrentHand),
+            name: detail.info.tableName,
+        },
+        players: detail.players.map(p => ({
+            playerAddress: p.playerAddress,
+            operator: p.operator,
+            chips: fromChipUnits(p.playerChips),
+            annoncePublicKey: p.playerAnnoncePublicKey ?? null,
+        }))
+    };
+};
+
+export const decodePlayerTables = (tableIds) => tableIds.map(id => id.toString());
+
 export function usePrivatePokerLobby({ onOperatorTopUp } = {}) {
     const { address } = useConnection();
     const { mutateAsync } = useWriteContract();
@@ -93,64 +211,6 @@ export function usePrivatePokerLobby({ onOperatorTopUp } = {}) {
         }
     };
 
-    // --- DECODERS ---
-
-    const decodeLobbyBlob = (blob) => {
-        const [lobby] = decodeAbiParameters(
-            [{
-                type: 'tuple',
-                components: [
-                    { name: 'lobbyId', type: 'uint256' },
-                    { name: 'lobbyGameType', type: 'uint256' },
-                    { name: 'lobbyFlags', type: 'uint256' },
-                    { name: 'lobbyTableCount', type: 'uint256' },
-                    { name: 'lobbyPlayerCount', type: 'uint256' },
-                    { name: 'lobbyTotalVolume', type: 'uint256' },
-                    { name: 'lobbyName', type: 'string' }
-                ]
-            }],
-            blob
-        );
-
-        return {
-            id: lobby.lobbyId.toString(),
-            gameType: Number(lobby.lobbyGameType),
-            flags: Number(lobby.lobbyFlags),
-            tableCount: Number(lobby.lobbyTableCount),
-            playerCount: Number(lobby.lobbyPlayerCount),
-            totalVolume: lobby.lobbyTotalVolume.toString(),
-            name: lobby.lobbyName,
-        };
-    };
-
-    const decodeTableBlob = (blob) => {
-        const [table] = decodeAbiParameters(
-            [{
-                type: 'tuple',
-                components: [
-                    { name: 'tableId', type: 'uint256' },
-                    { name: 'tableFlags', type: 'uint256' },
-                    { name: 'tableBuyin', type: 'uint256' },
-                    { name: 'tablePlayerCount', type: 'uint256' },
-                    { name: 'tableTotalBuyin', type: 'uint256' },
-                    { name: 'tableCurrentHand', type: 'uint256' },
-                    { name: 'tableName', type: 'string' }
-                ]
-            }],
-            blob
-        );
-
-        return {
-            id: table.tableId.toString(),
-            flags: Number(table.tableFlags),
-            buyIn: fromChipUnits(table.tableBuyin),
-            playerCount: Number(table.tablePlayerCount),
-            totalBuyIn: fromChipUnits(table.tableTotalBuyin),
-            currentHand: Number(table.tableCurrentHand),
-            name: table.tableName,
-        };
-    };
-
     // --- READ OPERATIONS ---
 
     const getLobbyCount = async () => {
@@ -210,63 +270,7 @@ export function usePrivatePokerLobby({ onOperatorTopUp } = {}) {
             args: [BigInt(lobbyId), BigInt(tableId)],
         });
 
-        const tableDetailShape = (includeAnnoncePublicKey) => [
-            {
-                type: 'tuple',
-                components: [
-                    {
-                        name: 'info',
-                        type: 'tuple',
-                        components: [
-                            { name: 'tableId', type: 'uint256' },
-                            { name: 'tableFlags', type: 'uint256' },
-                            { name: 'tableBuyin', type: 'uint256' },
-                            { name: 'tablePlayerCount', type: 'uint256' },
-                            { name: 'tableTotalBuyin', type: 'uint256' },
-                            { name: 'tableCurrentHand', type: 'uint256' },
-                            { name: 'tableName', type: 'string' }
-                        ]
-                    },
-                    {
-                        name: 'players',
-                        type: 'tuple[]',
-                        components: [
-                            { name: 'playerAddress', type: 'address' },
-                            { name: 'operator', type: 'address' },
-                            { name: 'playerChips', type: 'uint256' },
-                            ...(includeAnnoncePublicKey
-                                ? [{ name: 'playerAnnoncePublicKey', type: 'bytes' }]
-                                : [])
-                        ]
-                    }
-                ]
-            }
-        ];
-
-        let detail;
-        try {
-            [detail] = decodeAbiParameters(tableDetailShape(true), blob);
-        } catch {
-            [detail] = decodeAbiParameters(tableDetailShape(false), blob);
-        }
-
-        return {
-            info: {
-                id: detail.info.tableId.toString(),
-                flags: Number(detail.info.tableFlags),
-                buyIn: fromChipUnits(detail.info.tableBuyin),
-                playerCount: Number(detail.info.tablePlayerCount),
-                totalBuyIn: fromChipUnits(detail.info.tableTotalBuyin),
-                currentHand: Number(detail.info.tableCurrentHand),
-                name: detail.info.tableName,
-            },
-            players: detail.players.map(p => ({
-                playerAddress: p.playerAddress,
-                operator: p.operator,
-                chips: fromChipUnits(p.playerChips),
-                annoncePublicKey: p.playerAnnoncePublicKey ?? null,
-            }))
-        };
+        return decodeTableDetailBlob(blob);
     };
 
     const getPlayerTables = async (playerAddress) => {
@@ -279,8 +283,7 @@ export function usePrivatePokerLobby({ onOperatorTopUp } = {}) {
             args: [playerAddress],
         });
 
-        // Convert the returned BigInt array to strings for easy frontend comparison
-        return tableIds.map(id => id.toString());
+        return decodePlayerTables(tableIds);
     };
 
     // --- WRITE OPERATIONS ---
