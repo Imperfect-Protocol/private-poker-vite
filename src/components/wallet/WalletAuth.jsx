@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useEffect } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { useAppKitAccount, useAppKit } from '@reown/appkit/react'
 import { useDisconnect, useConnection } from 'wagmi'
 import { formatUnits, isAddress, parseAbi } from 'viem';
 import { CHIPS_CONTRACT_ADDRESS, PPDC_CONTRACT_ADDRESS } from '@/lib/chain';
-import { publicPokerClient } from '@/lib/publicPokerClient';
+import { useChainPolling } from '@/hooks/useChainPolling';
 
 const PPDC = 'PPDC';
 
@@ -23,68 +23,46 @@ function formatChipsBalance(balance) {
 
 export default function WalletAuth() {
   const [mounted, setMounted] = useState(false)
-  const [chipsBalance, setChipsBalance] = useState(null)
-  const [ppdcBalance, setPpdcBalance] = useState(null)
   const { open } = useAppKit()
   const { disconnect } = useDisconnect()
   const { isConnected } = useAppKitAccount()
 
   const { address } = useConnection();
+  const chipsRequest = useMemo(() => (
+    address && isAddress(CHIPS_CONTRACT_ADDRESS)
+      ? {
+        address: CHIPS_CONTRACT_ADDRESS,
+        abi: CHIPS_ABI,
+        functionName: 'balanceOf',
+        args: [address],
+      }
+      : null
+  ), [address]);
+  const ppdcRequest = useMemo(() => (
+    address && isAddress(PPDC_CONTRACT_ADDRESS)
+      ? {
+        address: PPDC_CONTRACT_ADDRESS,
+        abi: CHIPS_ABI,
+        functionName: 'balanceOf',
+        args: [address],
+      }
+      : null
+  ), [address]);
+  const chipsPoll = useChainPolling(chipsRequest, {
+    enabled: Boolean(chipsRequest),
+    intervalMs: 10000,
+  });
+  const ppdcPoll = useChainPolling(ppdcRequest, {
+    enabled: Boolean(ppdcRequest),
+    intervalMs: 10000,
+  });
+  const chipsBalance = chipsPoll.error ? null : chipsPoll.data ?? null;
+  const ppdcBalance = ppdcPoll.error ? null : ppdcPoll.data ?? null;
 
   useEffect(() => {
-    setMounted(true)
+    const timer = setTimeout(() => setMounted(true), 0);
+    return () => clearTimeout(timer);
   }, [])
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadTokenBalances = async () => {
-      if (!address) {
-        setChipsBalance(null);
-        setPpdcBalance(null);
-        return;
-      }
-
-      try {
-        const [chips, ppdc] = await Promise.all([
-          isAddress(CHIPS_CONTRACT_ADDRESS)
-            ? publicPokerClient.readContract({
-              address: CHIPS_CONTRACT_ADDRESS,
-              abi: CHIPS_ABI,
-              functionName: 'balanceOf',
-              args: [address],
-            })
-            : Promise.resolve(null),
-          isAddress(PPDC_CONTRACT_ADDRESS)
-            ? publicPokerClient.readContract({
-              address: PPDC_CONTRACT_ADDRESS,
-              abi: CHIPS_ABI,
-              functionName: 'balanceOf',
-              args: [address],
-            })
-            : Promise.resolve(null),
-        ]);
-        if (!cancelled) {
-          setChipsBalance(chips);
-          setPpdcBalance(ppdc);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.error('Failed to load token balances:', error);
-          setChipsBalance(null);
-          setPpdcBalance(null);
-        }
-      }
-    };
-
-    loadTokenBalances();
-    const timer = setInterval(loadTokenBalances, 10000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [address]);
 
   // Hydration fix: shows a neutral placeholder during server/client hand-off
   if (!mounted) return <div className="w-48 h-9 bg-slate-900/50 rounded border border-slate-800 animate-pulse" />

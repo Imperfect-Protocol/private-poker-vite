@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useConnection } from 'wagmi';
 import { isAddress, parseAbi } from 'viem';
 import { useAccountSession } from '@/contexts/AccountSessionContext.jsx';
 import { ACCOUNT_CONTRACT_ADDRESS } from '@/lib/chain';
-import { publicPokerClient } from '@/lib/publicPokerClient';
+import { useChainPolling } from '@/hooks/useChainPolling';
 
 const ACCOUNT_STATUS = {
   VERIFIED: 2n,
@@ -22,11 +22,53 @@ const normalizeAddress = (value) => value?.toLowerCase() ?? '';
 export function useMemberAccess() {
   const { address, isConnected } = useConnection();
   const { accountSession, isRestoringSession } = useAccountSession();
-  const [accountStatus, setAccountStatus] = useState(0n);
-  const [isSubscriptionActive, setIsSubscriptionActive] = useState(false);
-  const [isChecking, setIsChecking] = useState(false);
   const [isAccessDelaying, setIsAccessDelaying] = useState(true);
-  const [hasCheckedAccount, setHasCheckedAccount] = useState(false);
+  const canCheckAccount = Boolean(isConnected && address && isAddress(ACCOUNT_CONTRACT_ADDRESS));
+
+  const accountStatusRequest = useMemo(() => (
+    canCheckAccount
+      ? {
+        address: ACCOUNT_CONTRACT_ADDRESS,
+        abi: ACCOUNT_ABI,
+        functionName: 'getAccountStatus',
+        args: [address],
+      }
+      : null
+  ), [address, canCheckAccount]);
+
+  const accountStatusPoll = useChainPolling(accountStatusRequest, {
+    enabled: canCheckAccount,
+    intervalMs: 10000,
+  });
+
+  const accountStatus = canCheckAccount ? (accountStatusPoll.data ?? 0n) : 0n;
+  const isVerified = accountStatus === ACCOUNT_STATUS.VERIFIED;
+
+  const subscriptionRequest = useMemo(() => (
+    canCheckAccount && isVerified
+      ? {
+        address: ACCOUNT_CONTRACT_ADDRESS,
+        abi: ACCOUNT_ABI,
+        functionName: 'isSubscriptionActive',
+        args: [address],
+      }
+      : null
+  ), [address, canCheckAccount, isVerified]);
+
+  const subscriptionPoll = useChainPolling(subscriptionRequest, {
+    enabled: canCheckAccount && isVerified,
+    intervalMs: 10000,
+  });
+
+  const isSubscriptionActive = canCheckAccount && isVerified
+    ? Boolean(subscriptionPoll.data)
+    : false;
+  const isChecking = Boolean(
+    canCheckAccount
+    && (accountStatusPoll.isLoading || (isVerified && subscriptionPoll.isLoading))
+  );
+  const hasCheckedAccount = !canCheckAccount
+    || (accountStatusPoll.hasResolved && (!isVerified || subscriptionPoll.hasResolved));
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -35,63 +77,6 @@ export function useMemberAccess() {
 
     return () => clearTimeout(timeout);
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    let interval = null;
-
-    const loadAccount = async () => {
-      if (!isConnected || !address || !isAddress(ACCOUNT_CONTRACT_ADDRESS)) {
-        setAccountStatus(0n);
-        setIsSubscriptionActive(false);
-        setIsChecking(false);
-        setHasCheckedAccount(true);
-        return;
-      }
-
-      setIsChecking(true);
-      try {
-        const status = await publicPokerClient.readContract({
-          address: ACCOUNT_CONTRACT_ADDRESS,
-          abi: ACCOUNT_ABI,
-          functionName: 'getAccountStatus',
-          args: [address],
-        });
-        const active = status === ACCOUNT_STATUS.VERIFIED
-          ? await publicPokerClient.readContract({
-            address: ACCOUNT_CONTRACT_ADDRESS,
-            abi: ACCOUNT_ABI,
-            functionName: 'isSubscriptionActive',
-            args: [address],
-          })
-          : false;
-        if (!cancelled) {
-          setAccountStatus(status);
-          setIsSubscriptionActive(Boolean(active));
-        }
-      } catch (error) {
-        console.error('Failed to load membership account status:', error);
-        if (!cancelled) {
-          setAccountStatus(0n);
-          setIsSubscriptionActive(false);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsChecking(false);
-          setHasCheckedAccount(true);
-        }
-      }
-    };
-
-    setHasCheckedAccount(false);
-    loadAccount();
-    interval = setInterval(loadAccount, 10000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [address, isConnected]);
 
   const isWalletConnected = Boolean(isConnected && address);
   const hasCurrentWalletKeypair = Boolean(
@@ -106,7 +91,6 @@ export function useMemberAccess() {
     isRestoringSession || isAccessDelaying
     || (isWalletConnected && !hasCheckedAccount)
   );
-  const isVerified = accountStatus === ACCOUNT_STATUS.VERIFIED;
 
   return {
     accountStatus,
