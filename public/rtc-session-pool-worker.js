@@ -4,6 +4,7 @@ let nextPortId = 1;
 
 const RTC_POOL_GOSSIP_ANNOUNCE = 'RTC_POOL_GOSSIP_ANNOUNCE';
 const RTC_POOL_GOSSIP_TRIGGER_OFFER = 'RTC_POOL_GOSSIP_TRIGGER_OFFER';
+const RTC_POOL_P2P_MST_FRAGMENT = 'p2p-mst-fragment';
 const STALE_PORT_MS = 15000;
 const PRUNE_INTERVAL_MS = 5000;
 
@@ -236,6 +237,20 @@ self.onconnect = (event) => {
         type: message.type,
         from: formatPeer(message.originAddress),
         to: formatPeer(message.targetAddress),
+      });
+      broadcast({
+        ...message,
+        fromSharedWorker: true,
+      }, portId);
+      return;
+    }
+
+    if (message?.type === RTC_POOL_P2P_MST_FRAGMENT) {
+      logWorker('p2p mst fragment scattering', {
+        messageId: message.id,
+        fromNode: formatPeer(message.fromNode),
+        toNode: formatPeer(message.toNode),
+        edgeCount: message.edges?.length ?? 0,
       });
       broadcast({
         ...message,

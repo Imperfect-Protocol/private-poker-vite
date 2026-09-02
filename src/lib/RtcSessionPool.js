@@ -1,5 +1,10 @@
 import { hexToBytes, toHex } from 'viem';
 import { decryptFromPeer, encryptForPeer, normalizePeerPublicKey } from '@/lib/crypto';
+import {
+  P2P_MST_MESSAGE,
+  RouteIntentGraph,
+} from '@/lib/p2p_mst';
+import { makeMeshRtcConfig } from '@/lib/mesh';
 
 const RTC_POOL_SIGNAL = 'RTC_POOL_SIGNAL';
 const RTC_POOL_ROUTE_REQUEST = 'RTC_POOL_ROUTE_REQUEST';
@@ -7,8 +12,10 @@ const RTC_POOL_ROUTE_RESULT = 'RTC_POOL_ROUTE_RESULT';
 const RTC_POOL_LOCAL_NOTICE = 'RTC_POOL_LOCAL_NOTICE';
 const RTC_POOL_GOSSIP_ANNOUNCE = 'RTC_POOL_GOSSIP_ANNOUNCE';
 const RTC_POOL_GOSSIP_TRIGGER_OFFER = 'RTC_POOL_GOSSIP_TRIGGER_OFFER';
+const RTC_POOL_P2P_MST_FRAGMENT = P2P_MST_MESSAGE.FRAGMENT;
 const RTC_POOL_BROADCAST_CHANNEL = 'private-poker:rtc-session-pool';
 const DEFAULT_TTL = 6;
+const DEFAULT_P2P_MST_EDGE_TTL_MS = 120_000;
 const MAX_SEEN_MESSAGES = 500;
 const DELIVERY_TIMEOUT_MS = 800;
 const SILENT_DELIVERY_TIMEOUT_MS = 8000;
@@ -18,9 +25,6 @@ const DEFAULT_MAX_CONNECTION_REQUESTS = 1;
 const DEFAULT_MAX_SILENT_CONNECTIONS = 12;
 const DEFAULT_SILENT_CONNECTION_MAX_AGE_MS = 30 * 60 * 1000;
 const SILENT_CONNECTION_PRUNE_MS = 60 * 1000;
-const RTC_CONFIG = {
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-};
 const ENDPOINT = {
   TABLE: 'table',
   LOBBY: 'lobby',
@@ -171,7 +175,7 @@ class LobbySilentRtcEndpoint {
       peer: formatPeer(this.peer.playerAddress),
       createChannel,
     });
-    const pc = new RTCPeerConnection(RTC_CONFIG);
+    const pc = new RTCPeerConnection(makeMeshRtcConfig({ randomizeIceServer: true }));
     pc.ondatachannel = (event) => {
       logPool('silent data channel received', {
         local: formatPeer(this.localSession.playerAddress),
@@ -342,6 +346,8 @@ class RtcSessionPool {
     this.silentEndpoints = new Map();
     this.seenMessages = new Set();
     this.seenGossipMessages = new Map();
+    this.p2pMstGraphs = new Map();
+    this.notifiedP2PMstRoutes = new Set();
     this.pendingDeliveries = new Map();
     this.pendingRoutes = new Map();
     this.seenRouteRequests = new Set();
@@ -607,6 +613,12 @@ class RtcSessionPool {
       return;
     }
 
+    if (message?.type === RTC_POOL_P2P_MST_FRAGMENT) {
+      if (!this.rememberGossip(message)) return;
+      await this.handleP2PMstFragment(message);
+      return;
+    }
+
     if (message?.type === RTC_POOL_ROUTE_REQUEST) {
       await this.handleRouteRequest(message);
       return;
@@ -680,6 +692,12 @@ class RtcSessionPool {
 
     if (message.type === RTC_POOL_GOSSIP_ANNOUNCE || message.type === RTC_POOL_GOSSIP_TRIGGER_OFFER) {
       await this.handleGossipControlMessage(message);
+      return;
+    }
+
+    if (message.type === RTC_POOL_P2P_MST_FRAGMENT) {
+      if (!this.rememberGossip(message)) return;
+      await this.handleP2PMstFragment(message);
       return;
     }
 
@@ -978,6 +996,33 @@ class RtcSessionPool {
     return true;
   }
 
+  p2pMstGraphKey({ playerAddress, lobbyId, tableId }) {
+    return [
+      normalizeAddress(playerAddress),
+      String(lobbyId ?? ''),
+      String(tableId ?? ''),
+    ].join(':');
+  }
+
+  p2pMstGraphFor({ playerAddress, lobbyId, tableId }) {
+    const key = this.p2pMstGraphKey({ playerAddress, lobbyId, tableId });
+    if (!this.p2pMstGraphs.has(key)) {
+      this.p2pMstGraphs.set(key, new RouteIntentGraph({
+        nodeId: playerAddress,
+        edgeTtlMs: DEFAULT_P2P_MST_EDGE_TTL_MS,
+      }));
+    }
+    return this.p2pMstGraphs.get(key);
+  }
+
+  localTableSessionsFor(lobbyId, tableId) {
+    return [...this.sessions.values()].filter((session) => (
+      (session.endpoint ?? ENDPOINT.TABLE) === ENDPOINT.TABLE
+      && String(session.config?.lobbyId) === String(lobbyId)
+      && String(session.config?.tableId) === String(tableId)
+    ));
+  }
+
   waitForDelivery(messageId, timeoutMs = DELIVERY_TIMEOUT_MS) {
     if (!messageId) return Promise.resolve(false);
 
@@ -1161,23 +1206,47 @@ class RtcSessionPool {
     lobbyId,
     tableId,
   }) {
-    const message = this.createGossipControlMessage({
-      type: RTC_POOL_GOSSIP_ANNOUNCE,
+    return this.sendP2PMstAnnounce({
       originAddress,
       targetAddress,
       lobbyId,
       tableId,
     });
+  }
 
-    logPool('gossip announce start', {
-      messageId: message.id,
+  sendP2PMstAnnounce({
+    originAddress,
+    targetAddress,
+    lobbyId,
+    tableId,
+  }) {
+    const flowId = makeMessageId('p2p-mst', targetAddress, lobbyId, tableId);
+    const graph = this.p2pMstGraphFor({
+      playerAddress: originAddress,
+      lobbyId,
+      tableId,
+    });
+    graph.addLocalIntent({
+      flowId,
+      from: originAddress,
+      to: targetAddress,
+      createdAt: Date.now(),
+    });
+
+    logPool('p2p mst announce start', {
+      flowId,
       from: formatPeer(originAddress),
       to: formatPeer(targetAddress),
       lobbyId,
       tableId,
     });
 
-    return this.forwardGossipControl(message);
+    this.notifyLocalP2PMstRoutes({ graph, lobbyId, tableId });
+    return this.forwardP2PMstFragments({
+      graph,
+      lobbyId,
+      tableId,
+    });
   }
 
   sendGossipTriggerOffer({
@@ -1206,6 +1275,156 @@ class RtcSessionPool {
     });
 
     return this.forwardGossipControl(message);
+  }
+
+  forwardP2PMstFragments({
+    graph,
+    lobbyId,
+    tableId,
+    fromPeerAddress = null,
+  }) {
+    let sent = false;
+    const sendFragment = (fragment) => {
+      const message = {
+        ...fragment,
+        id: makeMessageId('p2p-mst-fragment', fragment.toNode, lobbyId, tableId),
+        lobbyId: String(lobbyId),
+        tableId: String(tableId),
+        ttl: DEFAULT_TTL,
+        visited: [graph.nodeId],
+      };
+
+      sent = this.scatterP2PMstFragment(message, { excludePeerAddress: fromPeerAddress }) || sent;
+      sent = this.postBroadcast(message) || sent;
+      sent = this.postWorker(message) || sent;
+    };
+
+    this.links.forEach((links, peerKey) => {
+      if (peerKey === normalizeAddress(fromPeerAddress)) return;
+      if (!links.some((link) => link.channel?.readyState === 'open')) return;
+
+      const fragment = graph.buildFragmentForNeighbor(peerKey);
+      if (fragment) sendFragment(fragment);
+    });
+
+    return sent;
+  }
+
+  scatterP2PMstFragment(message, { excludePeerAddress = null } = {}) {
+    const excludePeerKey = normalizeAddress(excludePeerAddress);
+    const visited = new Set((message.visited ?? []).map(normalizeAddress));
+    let sent = false;
+
+    this.links.forEach((links, peerKey) => {
+      if (peerKey === excludePeerKey || visited.has(peerKey)) return;
+      links.forEach((link) => {
+        if (link.direction === ENDPOINT.LOBBY) {
+          this.touchSilentEndpoint(link.session);
+        }
+        sent = this.sendToLink(link, message) || sent;
+      });
+    });
+
+    logPool(`p2p mst scatter ${sent ? 'sent' : 'not sent'}`, {
+      fragmentId: message.id,
+      fromNode: formatPeer(message.fromNode),
+      toNode: formatPeer(message.toNode),
+      exclude: formatPeer(excludePeerAddress),
+      ttl: message.ttl,
+      edges: message.edges?.length ?? 0,
+      linkPeers: [...this.links.keys()].map(formatPeer),
+    });
+    return sent;
+  }
+
+  async handleP2PMstFragment(message, { receiverSession = null, fromPeerAddress = null } = {}) {
+    const sessions = receiverSession
+      ? [receiverSession]
+      : this.localTableSessionsFor(message.lobbyId, message.tableId);
+    if (sessions.length === 0) return false;
+
+    let changed = false;
+    for (const session of sessions) {
+      const playerAddress = session.config?.playerAddress;
+      if (!playerAddress) continue;
+      if (message.toNode && normalizeAddress(message.toNode) !== normalizeAddress(playerAddress)) {
+        continue;
+      }
+
+      const graph = this.p2pMstGraphFor({
+        playerAddress,
+        lobbyId: message.lobbyId,
+        tableId: message.tableId,
+      });
+      const graphChanged = graph.mergeFragment({
+        fragment: message,
+        fromNeighbor: fromPeerAddress ?? message.fromNode,
+      });
+      if (!graphChanged) continue;
+
+      changed = true;
+      this.notifyLocalP2PMstRoutes({ graph, lobbyId: message.lobbyId, tableId: message.tableId });
+      this.forwardP2PMstFragments({
+        graph,
+        lobbyId: message.lobbyId,
+        tableId: message.tableId,
+        fromPeerAddress: fromPeerAddress ?? message.fromNode,
+      });
+    }
+
+    return changed;
+  }
+
+  notifyLocalP2PMstRoutes({ graph, lobbyId, tableId }) {
+    for (const route of graph.selectedRoutes()) {
+      const session = this.getLocalTableSession(route.to, lobbyId, tableId);
+      if (!session?.hasPendingP2PIntent?.(route.from)) continue;
+
+      const notificationKey = [
+        String(lobbyId),
+        String(tableId),
+        route.to,
+        route.from,
+        route.flowId,
+      ].join(':');
+      if (this.notifiedP2PMstRoutes.has(notificationKey)) continue;
+
+      this.notifiedP2PMstRoutes.add(notificationKey);
+      if (this.notifiedP2PMstRoutes.size > MAX_SEEN_MESSAGES) {
+        const [oldest] = this.notifiedP2PMstRoutes;
+        this.notifiedP2PMstRoutes.delete(oldest);
+      }
+
+      logPool('p2p mst route available', {
+        flowId: route.flowId,
+        local: formatPeer(route.to),
+        peer: formatPeer(route.from),
+        distance: route.distance,
+        via: formatPeer(route.viaNeighbor),
+      });
+      void Promise.resolve(session.handleP2PMstRouteIntent?.(route)).catch((error) => {
+        logPool('p2p mst route handler failed', error);
+      });
+    }
+  }
+
+  hasP2PMstRouteBetween({ leftAddress, rightAddress, lobbyId, tableId }) {
+    const left = normalizeAddress(leftAddress);
+    const right = normalizeAddress(rightAddress);
+    return this.localTableSessionsFor(lobbyId, tableId).some((session) => {
+      const graph = this.p2pMstGraphFor({
+        playerAddress: session.config?.playerAddress,
+        lobbyId,
+        tableId,
+      });
+      return graph.selectedRoutes().some((route) => (
+        route.distance > 0
+        && (
+          (route.from === left && route.to === right)
+          || (route.from === right && route.to === left)
+        )
+      ));
+    });
   }
 
   getLocalTableSession(playerAddress, lobbyId, tableId) {
@@ -1621,6 +1840,21 @@ class RtcSessionPool {
   }
 
   async handleMessage(receiverSession, fromPeerAddress, message) {
+    if (message?.type === RTC_POOL_P2P_MST_FRAGMENT) {
+      logPool('data-channel p2p mst fragment received', {
+        fragmentId: message.id,
+        receiver: formatPeer(receiverSession.config?.playerAddress),
+        fromPeer: formatPeer(fromPeerAddress),
+        fromNode: formatPeer(message.fromNode),
+        toNode: formatPeer(message.toNode),
+        edges: message.edges?.length ?? 0,
+        ttl: message.ttl,
+      });
+      if (!this.rememberGossip(message)) return true;
+      await this.handleP2PMstFragment(message, { receiverSession, fromPeerAddress });
+      return true;
+    }
+
     if (message?.type === RTC_POOL_GOSSIP_ANNOUNCE || message?.type === RTC_POOL_GOSSIP_TRIGGER_OFFER) {
       logPool('data-channel gossip control received', {
         messageId: message.id,
@@ -1722,6 +1956,7 @@ class RtcSessionPool {
       const message = JSON.parse(rawData);
       if (
         message?.type === RTC_POOL_SIGNAL
+        || message?.type === RTC_POOL_P2P_MST_FRAGMENT
         || message?.type === RTC_POOL_GOSSIP_ANNOUNCE
         || message?.type === RTC_POOL_GOSSIP_TRIGGER_OFFER
       ) {
@@ -1753,5 +1988,6 @@ export {
   RTC_POOL_SIGNAL,
   RTC_POOL_GOSSIP_ANNOUNCE,
   RTC_POOL_GOSSIP_TRIGGER_OFFER,
+  RTC_POOL_P2P_MST_FRAGMENT,
   ENDPOINT,
 };

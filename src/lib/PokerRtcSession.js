@@ -9,29 +9,19 @@ import {
 import {
   RTC_POOL_GOSSIP_ANNOUNCE,
   RTC_POOL_GOSSIP_TRIGGER_OFFER,
+  RTC_POOL_P2P_MST_FRAGMENT,
   RTC_POOL_SIGNAL,
   rtcSessionPool,
 } from '@/lib/RtcSessionPool';
-import { announcePrivateMesh } from '@/lib/privateMesh';
-
-const ICE_SERVERS = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun2.l.google.com:19302' },
-  { urls: 'stun:stun3.l.google.com:19302' },
-  { urls: 'stun:stun4.l.google.com:19302' },
-  { urls: 'stun:global.stun.twilio.com:3478' },
-  { urls: 'stun:stun.cloudflare.com:3478' },
-];
+import {
+  BackgroundP2PConnectionEstablisher,
+  MeshRelayConnectionEstablisher,
+  P2PConnectionCoordinator,
+} from '@/lib/p2p_connection';
+import { makeMeshRtcConfig } from '@/lib/mesh';
 
 function randomRtcConfig() {
-  // const index = Math.floor(Math.random() * ICE_SERVERS.length);
-  // return { iceServers: [ICE_SERVERS[index]] };
-  return {
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-    ]
-  };
+  return makeMeshRtcConfig({ randomizeIceServer: true });
 }
 
 function formatIceServer(iceServer) {
@@ -223,6 +213,19 @@ export class PokerRtcSession {
     this.lookingForPeers = new Set();
     this.announceTimer = null;
     this.gossipFallbackTimers = new Map();
+    this.backgroundP2PEstablisher = new BackgroundP2PConnectionEstablisher({
+      session: this,
+      sessionPool: this.sessionPool,
+    });
+    this.meshRelayEstablisher = new MeshRelayConnectionEstablisher({
+      session: this,
+    });
+    this.connectionCoordinator = new P2PConnectionCoordinator({
+      backgroundP2P: this.backgroundP2PEstablisher,
+      meshRelay: this.meshRelayEstablisher,
+      fallbackTimers: this.gossipFallbackTimers,
+      fallbackMs: GOSSIP_DISCOVERY_FALLBACK_MS,
+    });
     this.config = {
       playerAddress: undefined,
       operator: undefined,
@@ -323,64 +326,16 @@ export class PokerRtcSession {
         .filter((peerAddress) => !this.connectedLinks.has(linkKey(peerAddress, RTC_LINK.INBOUND)));
       if (lookingFor.length === 0) return;
 
-      const gossipAnnounced = this.announceGossipRoutes(lookingFor);
-      const meshNow = lookingFor.filter((peerAddress) => (
-        !gossipAnnounced.has(normalizeAddress(peerAddress))
-      ));
-      if (meshNow.length > 0) {
-        this.announceMeshRoutes(meshNow);
-      }
-      this.scheduleMeshFallbackForGossip(lookingFor.filter((peerAddress) => (
-        gossipAnnounced.has(normalizeAddress(peerAddress))
-      )));
+      this.connectionCoordinator.announce(lookingFor);
     }, 150);
   }
 
   announceGossipRoutes(lookingFor) {
-    const { playerAddress, lobbyId, tableId } = this.config;
-    const announced = new Set();
-    if (!playerAddress || !lobbyId || !tableId) return announced;
-
-    lookingFor.forEach((targetAddress) => {
-      const targetKey = normalizeAddress(targetAddress);
-      const sent = this.sessionPool.sendGossipAnnounce?.({
-        originAddress: playerAddress,
-        targetAddress,
-        lobbyId,
-        tableId,
-      });
-      if (sent) {
-        announced.add(targetKey);
-        this.logActivity(`gossip announce ${formatPeer(targetAddress)}`);
-        this.emitActivity(`${formatSeat(targetAddress)} <~ Searching...`);
-      } else {
-        this.emitActivity(`${formatSeat(targetAddress)} <! Unavailable`);
-      }
-    });
-    return announced;
+    return this.backgroundP2PEstablisher.announce(lookingFor);
   }
 
   announceMeshRoutes(lookingFor) {
-    const { playerAddress, lobbyId, tableId } = this.config;
-    const unresolved = lookingFor.filter((peerAddress) => (
-      this.lookingForPeers.has(normalizeAddress(peerAddress))
-      && !this.connectedLinks.has(linkKey(peerAddress, RTC_LINK.INBOUND))
-    ));
-    if (!playerAddress || !lobbyId || !tableId || unresolved.length === 0) return;
-
-    this.logActivity(`mesh discovery fallback for ${unresolved.map(formatPeer).join(', ')}`);
-    unresolved.forEach((peerAddress) => {
-      this.emitActivity(`${formatSeat(peerAddress)} << Searching...`);
-    });
-    void announcePrivateMesh({
-      originAddress: playerAddress,
-      lobbyId,
-      tableId,
-      lookingFor: unresolved,
-      callback: async (inboundMessage, enqueueFn) => {
-        await this.handleSignal(inboundMessage, enqueueFn);
-      },
-    });
+    this.meshRelayEstablisher.announce(lookingFor);
   }
 
   scheduleMeshFallbackForGossip(lookingFor) {
@@ -395,6 +350,7 @@ export class PokerRtcSession {
         this.gossipFallbackTimers.delete(peerKey);
         if (!this.lookingForPeers.has(peerKey)) return;
         if (this.connectedLinks.has(linkKey(peerAddress, RTC_LINK.INBOUND))) return;
+        if (this.backgroundP2PEstablisher.hasKnownRoute(peerAddress)) return;
         this.announceMeshRoutes([peerAddress]);
       }, GOSSIP_DISCOVERY_FALLBACK_MS);
       this.gossipFallbackTimers.set(peerKey, timer);
@@ -409,6 +365,27 @@ export class PokerRtcSession {
     if (timer) clearTimeout(timer);
     this.gossipFallbackTimers.delete(peerKey);
     this.lookingForPeers.delete(peerKey);
+  }
+
+  hasPendingP2PIntent(peerAddress) {
+    const peerKey = normalizeAddress(peerAddress);
+    return Boolean(
+      peerKey
+      && this.lookingForPeers.has(peerKey)
+      && !this.connectedLinks.has(linkKey(peerAddress, RTC_LINK.INBOUND))
+    );
+  }
+
+  isInboundConnected(peerAddress) {
+    return this.connectedLinks.has(linkKey(peerAddress, RTC_LINK.INBOUND));
+  }
+
+  formatPeer(peerAddress) {
+    return formatPeer(peerAddress);
+  }
+
+  formatSeat(peerAddress) {
+    return formatSeat(peerAddress);
   }
 
   getSnapshot() {
@@ -898,6 +875,7 @@ export class PokerRtcSession {
 
       if (
         message?.type === RTC_POOL_SIGNAL
+        || message?.type === RTC_POOL_P2P_MST_FRAGMENT
         || message?.type === RTC_POOL_GOSSIP_ANNOUNCE
         || message?.type === RTC_POOL_GOSSIP_TRIGGER_OFFER
       ) {
@@ -1647,6 +1625,19 @@ export class PokerRtcSession {
     this.markGossipRouteFound(triggerTarget);
     this.emitActivity(`${formatSeat(triggerTarget)} :: Reachable via P2P Gossip`);
     await this.triggerOfferForPeer(triggerTarget, null, { transport: 'gossip' });
+  }
+
+  async handleP2PMstRouteIntent(route) {
+    const peerAddress = normalizeAddress(route?.from);
+    if (!this.hasPendingP2PIntent(peerAddress)) return;
+
+    this.markGossipRouteFound(peerAddress);
+    this.emitActivity(`${formatSeat(peerAddress)} :: Reachable via P2P MST`);
+    this.logActivity(`p2p mst route found ${formatPeer(peerAddress)} via ${formatPeer(route.viaNeighbor)} distance=${route.distance}`);
+    await this.triggerOfferForPeer(peerAddress, null, {
+      transport: 'gossip',
+      flowId: route.flowId,
+    });
   }
 
   async handleRelayEncryptedSignal(envelope) {

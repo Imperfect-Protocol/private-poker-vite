@@ -20,20 +20,24 @@ function meshEndpoints() {
     });
 }
 
-function getRandomMeshEndpoint() {
+function shuffledMeshEndpoints() {
   const endpoints = meshEndpoints();
-  if (endpoints.length === 0) return null;
-  const randomIndex = Math.floor(Math.random() * endpoints.length);
-  return endpoints[randomIndex].url;
+  for (let index = endpoints.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [endpoints[index], endpoints[swapIndex]] = [endpoints[swapIndex], endpoints[index]];
+  }
+  return endpoints.map((endpoint) => endpoint.url);
 }
 
 function pollSessionKey(lobbyId, tableId, peer) {
   return `${String(lobbyId)}:${String(tableId)}:${normalizeAddress(peer)}`;
 }
 
-function createPollSession({ url, lobbyId, tableId, peer, callback }) {
+function createPollSession({ urls, lobbyId, tableId, peer, callback }) {
   const session = {
-    url,
+    urls,
+    endpointIndex: 0,
+    url: urls[0],
     lobbyId: String(lobbyId),
     tableId: String(tableId),
     peer: normalizeAddress(peer),
@@ -48,6 +52,12 @@ function createPollSession({ url, lobbyId, tableId, peer, callback }) {
     if (!message || session.stopped) return;
     session.queue.push(message);
     session.currentAbort?.abort();
+  };
+  session.rotateEndpoint = () => {
+    if (session.urls.length < 2) return false;
+    session.endpointIndex = (session.endpointIndex + 1) % session.urls.length;
+    session.url = session.urls[session.endpointIndex];
+    return true;
   };
 
   return session;
@@ -106,6 +116,11 @@ async function sendAndPoll(session) {
         });
       } catch (error) {
         if (error.name === 'AbortError') continue;
+        session.queue.unshift(...rawOutbound);
+        if (session.rotateEndpoint()) {
+          console.warn('[privateMesh] endpoint failed, trying next:', error.message);
+          continue;
+        }
         throw error;
       } finally {
         if (session.currentAbort === abort) {
@@ -114,6 +129,11 @@ async function sendAndPoll(session) {
       }
 
       if (!response.ok) {
+        session.queue.unshift(...rawOutbound);
+        if (session.rotateEndpoint()) {
+          console.warn('[privateMesh] endpoint returned HTTP status, trying next:', response.status);
+          continue;
+        }
         throw new Error(`HTTP ${response.status}`);
       }
 
@@ -173,8 +193,8 @@ export async function announcePrivateMesh({ originAddress, lobbyId, tableId, loo
   const peer = normalizeAddress(originAddress);
   if (!peer || !lobbyId || !tableId || typeof callback !== 'function') return;
 
-  const url = getRandomMeshEndpoint();
-  if (!url) return;
+  const urls = shuffledMeshEndpoints();
+  if (urls.length === 0) return;
 
   const targets = lookingFor.map(normalizeAddress).filter(Boolean);
   const message = {
@@ -191,7 +211,7 @@ export async function announcePrivateMesh({ originAddress, lobbyId, tableId, loo
   }
 
   const session = createPollSession({
-    url,
+    urls,
     lobbyId,
     tableId,
     peer,
@@ -218,7 +238,7 @@ export function publishPrivateMesh(signals, enqueue) {
   return { accepted: true, messages };
 }
 
-export function publishPrivateMeshBye({ originAddress, enqueue } = {}) {
+export function publishPrivateMeshBye({ enqueue } = {}) {
   const message = { type: 'bootstrap-bye' };
   if (typeof enqueue === 'function') {
     enqueue(message);
