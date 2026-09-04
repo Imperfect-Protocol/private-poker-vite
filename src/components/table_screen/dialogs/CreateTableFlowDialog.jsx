@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import FlowStepDialog from '@/components/table_screen/dialogs/FlowStepDialog';
-import { useCreateTable } from 'privatepoker-hooks/hooks/useCreateTable';
-import { formatChainError } from 'privatepoker-hooks/lib/chain/errors';
+import { useCreateTable } from 'privatepoker-hooks/react/hooks/useCreateTable';
+import { formatChainError } from 'privatepoker-hooks/blockchain/errors/ChainErrors';
 
 const initialSteps = {
   signature: 'pending',

@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState } from 'react';
-import { usePrivatePokerLobby } from 'privatepoker-hooks/hooks/usePrivatePokerLobby';
+import { usePrivatePokerLobby } from 'privatepoker-hooks/react/hooks/usePrivatePokerLobby';
 import TableDialogOverlay from '@/components/dialog/TableDialogOverlay';
-import { getGameTypeName } from 'privatepoker-hooks/lib/constants';
-import { formatChainError } from 'privatepoker-hooks/lib/chain/errors';
-import { STAKES_OPTIONS } from 'privatepoker-hooks/lib/stakes';
+import { getGameTypeName } from 'privatepoker-hooks/config/constants';
+import { formatChainError } from 'privatepoker-hooks/blockchain/errors/ChainErrors';
+import { STAKES_OPTIONS } from 'privatepoker-hooks/poker/lobby/Stakes';
 
 export default function CreateTableDialog({
   lobbyId,

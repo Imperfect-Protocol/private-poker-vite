@@ -1,6 +1,6 @@
 "use client";
 
-import { ACCOUNT_STATUS, useAccounts } from 'privatepoker-hooks/hooks/useAccounts';
+import { ACCOUNT_STATUS, useAccounts } from 'privatepoker-hooks/react/hooks/useAccounts';
 import FlowStepDialog from '@/components/table_screen/dialogs/FlowStepDialog';
 
 function formatAddress(address) {

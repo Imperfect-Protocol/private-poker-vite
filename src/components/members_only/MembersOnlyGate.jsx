@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useMemberAccess } from 'privatepoker-hooks/hooks/useMemberAccess';
+import { useMemberAccess } from 'privatepoker-hooks/react/hooks/useMemberAccess';
 import MembersOnlyArea from '@/components/members_only/MembersOnlyArea';
 
 function MembershipPending() {

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import TableDialogOverlay from '@/components/dialog/TableDialogOverlay';
-import { formatChainError } from 'privatepoker-hooks/lib/chain/errors';
+import { formatChainError } from 'privatepoker-hooks/blockchain/errors/ChainErrors';
 
 export default function BuyInDialog({ tableData, lobbyId, onClose, onJoinRequest }) {
   const [isPending, setIsPending] = useState(false);

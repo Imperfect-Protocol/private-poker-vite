@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react';
 import TableScreen from '@/components/table_screen/Component';
-import { useAccounts } from 'privatepoker-hooks/hooks/useAccounts';
+import { useAccounts } from 'privatepoker-hooks/react/hooks/useAccounts';
 
 export default function ActiveTableView({
   table,

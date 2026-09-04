@@ -1,8 +1,8 @@
 "use client";
 
 import Web3Provider from '@/components/wallet/Web3Provider';
-import { AccountSessionProvider } from 'privatepoker-hooks/contexts/AccountSessionContext.jsx';
-import { BLSProvider } from 'privatepoker-hooks/contexts/BLSContext.jsx';
+import { AccountSessionProvider } from 'privatepoker-hooks/react/contexts/AccountSessionContext.jsx';
+import { BLSProvider } from 'privatepoker-hooks/react/contexts/BLSContext.jsx';
 
 export function Providers({ children }) {
   return (

@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useTable } from 'privatepoker-hooks/hooks/useTable';
-import { usePokerTable } from 'privatepoker-hooks/hooks/usePokerTable';
+import { useTable } from 'privatepoker-hooks/react/hooks/useTable';
+import { usePokerTable } from 'privatepoker-hooks/react/hooks/usePokerTable';
 import ActiveTableView from '@/components/table/ActiveTableView';
 import BuyInDialog from '@/components/table_screen/dialogs/BuyInDialog';
 import JoinTableFlowDialog from '@/components/table_screen/dialogs/JoinTableFlowDialog';
@@ -10,10 +10,10 @@ import ReJoinTableFlowDialog from '@/components/table_screen/dialogs/ReJoinTable
 import MediaDataChannelDialog from '@/components/table_screen/dialogs/MediaDataChannelDialog';
 import TerminalResultDialog from '@/components/table_screen/dialogs/TerminalResultDialog';
 import TopUpOperatorGasDialog from '@/components/table_screen/dialogs/TopUpOperatorGasDialog';
-import { useAccounts } from 'privatepoker-hooks/hooks/useAccounts';
-import { useWebcam } from 'privatepoker-hooks/hooks/useWebcam';
-import { submitConsoleLine } from 'privatepoker-hooks/lib/crum_pkr';
-import { emitLobbyTablesChanged } from 'privatepoker-hooks/lib/lobbyEvents';
+import { useAccounts } from 'privatepoker-hooks/react/hooks/useAccounts';
+import { useWebcam } from 'privatepoker-hooks/react/hooks/useWebcam';
+import { submitConsoleLine } from 'privatepoker-hooks/poker/core/crum_pkr';
+import { emitLobbyTablesChanged } from 'privatepoker-hooks/lobby/LobbyEvents';
 
 const readCreatedTableSnapshot = (tableId) => {
   if (typeof window === 'undefined') return null;
@@ -434,6 +434,10 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
         <JoinTableFlowDialog
           request={joinRequest}
           onOperatorTopUp={handleOperatorTopUp}
+          onJoined={() => {
+            emitLobbyTablesChanged({ lobbyId, tableId, reason: 'table-joined' });
+            table.refresh();
+          }}
           onComplete={() => {
             table.setIsSeated(true);
             setJoinRequest(null);

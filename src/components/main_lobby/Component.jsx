@@ -2,7 +2,7 @@
 
 import DemoDisclaimer from '@/components/demo_disclaimer/DemoDisclaimer';
 import LobbyCard from '@/components/lobby/LobbyCard';
-import { useLobby } from 'privatepoker-hooks/hooks/useLobby';
+import { useLobby } from 'privatepoker-hooks/react/hooks/useLobby';
 
 export default function MainLobby() {
   const { lobbies, isLoading } = useLobby();

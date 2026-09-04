@@ -3,8 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { MousePointerClick } from 'lucide-react';
 import FlowStepDialog from '@/components/table_screen/dialogs/FlowStepDialog';
-
-const POKE_SEARCH_MS = 10000;
+import { CONNECTION_RETRY_STATE } from 'privatepoker-hooks/networking/connection/p2p_connection';
 
 const peerConnectionStatus = (state) => {
   if (state === 'Connected') return 'connected';
@@ -34,23 +33,9 @@ export default function ReJoinTableFlowDialog({
 }) {
   const startedRef = useRef(false);
   const readyRef = useRef(false);
-  const pokeSearchTimerRef = useRef(null);
   const [signatureStatus, setSignatureStatus] = useState('unverified');
   const [error, setError] = useState('');
-  const [isSearchCycleActive, setIsSearchCycleActive] = useState(true);
   const [hasRtcConnecting, setHasRtcConnecting] = useState(false);
-
-  const startSearchCycle = () => {
-    if (pokeSearchTimerRef.current) {
-      clearTimeout(pokeSearchTimerRef.current);
-    }
-    setHasRtcConnecting(false);
-    setIsSearchCycleActive(true);
-    pokeSearchTimerRef.current = setTimeout(() => {
-      pokeSearchTimerRef.current = null;
-      setIsSearchCycleActive(false);
-    }, POKE_SEARCH_MS);
-  };
 
   useEffect(() => {
     if (startedRef.current) return;
@@ -72,27 +57,21 @@ export default function ReJoinTableFlowDialog({
     run();
   }, [onEnableNetwork, table]);
 
-  useEffect(() => {
-    startSearchCycle();
-    return () => {
-      if (pokeSearchTimerRef.current) {
-        clearTimeout(pokeSearchTimerRef.current);
-      }
-    };
-  }, []);
-
   const inboundStatus = peerConnectionStatus(networkSnapshot?.inboundState);
   const outboundStatus = subscriptionStatus(networkSnapshot?.outboundState);
   const isInboundConnected = networkSnapshot?.inboundState === 'Connected';
   const isRtcConnecting = isRtcConnectingState(networkSnapshot?.inboundState);
+  const inboundRetryState = networkSnapshot?.inboundRetryState;
+  const isRetryTrying = inboundRetryState?.state === CONNECTION_RETRY_STATE.TRYING_P2P_NETWORK
+    || inboundRetryState?.state === CONNECTION_RETRY_STATE.TRYING_MESH;
   const canPokeInbound = signatureStatus === 'active'
     && !isInboundConnected
-    && !isSearchCycleActive;
+    && inboundRetryState?.canPoke === true;
   const shownInboundStatus = isInboundConnected
     ? 'connected'
     : isRtcConnecting || hasRtcConnecting
       ? 'Connecting'
-      : isSearchCycleActive
+      : isRetryTrying
         ? 'Searching'
         : inboundStatus;
   const isComplete = signatureStatus === 'active'
@@ -101,12 +80,7 @@ export default function ReJoinTableFlowDialog({
 
   useEffect(() => {
     if (!isInboundConnected) return;
-    if (pokeSearchTimerRef.current) {
-      clearTimeout(pokeSearchTimerRef.current);
-      pokeSearchTimerRef.current = null;
-    }
     setHasRtcConnecting(false);
-    setIsSearchCycleActive(false);
   }, [isInboundConnected]);
 
   useEffect(() => {
@@ -143,16 +117,11 @@ export default function ReJoinTableFlowDialog({
               type="button"
               onClick={async () => {
                 setError('');
-                startSearchCycle();
+                setHasRtcConnecting(false);
                 try {
                   await table.retryInboundConnection?.();
                 } catch (err) {
                   console.error(err);
-                  if (pokeSearchTimerRef.current) {
-                    clearTimeout(pokeSearchTimerRef.current);
-                    pokeSearchTimerRef.current = null;
-                  }
-                  setIsSearchCycleActive(false);
                   setError(err.shortMessage || err.details || err.message || 'Poke failed.');
                 }
               }}

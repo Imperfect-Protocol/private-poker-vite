@@ -1,4 +1,4 @@
-import { PRIVATE_POKER_DEMO_DISCLAIMER } from 'privatepoker-hooks/lib/constants';
+import { PRIVATE_POKER_DEMO_DISCLAIMER } from 'privatepoker-hooks/config/constants';
 
 export default function DemoDisclaimer({ variant = 'footer', isVisible = true, isFading = false }) {
   const className = variant === 'splash'

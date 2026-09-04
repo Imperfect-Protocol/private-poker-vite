@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import FlowStepDialog from '@/components/table_screen/dialogs/FlowStepDialog';
-import { useJoinTable } from 'privatepoker-hooks/hooks/useJoinTable';
-import { formatChainError } from 'privatepoker-hooks/lib/chain/errors';
+import { useJoinTable } from 'privatepoker-hooks/react/hooks/useJoinTable';
+import { formatChainError } from 'privatepoker-hooks/blockchain/errors/ChainErrors';
 
 const initialSteps = {
   signature: 'pending',
@@ -11,7 +11,12 @@ const initialSteps = {
   transfer: 'pending',
 };
 
-export default function JoinTableFlowDialog({ request, onComplete, onOperatorTopUp }) {
+export default function JoinTableFlowDialog({
+  request,
+  onComplete,
+  onJoined,
+  onOperatorTopUp,
+}) {
   const { joinTableWithBuyIn } = useJoinTable({ onOperatorTopUp });
   const startedRef = useRef(false);
   const resultRef = useRef(null);
@@ -33,6 +38,7 @@ export default function JoinTableFlowDialog({ request, onComplete, onOperatorTop
         });
         resultRef.current = result;
         setIsComplete(true);
+        onJoined?.(result);
       } catch (err) {
         console.error(err);
         setError(formatChainError(err, 'Transaction failed or was rejected.'));
@@ -46,7 +52,7 @@ export default function JoinTableFlowDialog({ request, onComplete, onOperatorTop
     };
 
     run();
-  }, [joinTableWithBuyIn, request]);
+  }, [joinTableWithBuyIn, onJoined, request]);
 
   return (
     <FlowStepDialog

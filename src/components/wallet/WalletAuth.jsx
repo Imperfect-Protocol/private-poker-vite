@@ -3,15 +3,12 @@
 import { useMemo, useState, useEffect } from 'react'
 import { useAppKitAccount, useAppKit } from '@reown/appkit/react'
 import { useDisconnect, useConnection } from 'wagmi'
-import { formatUnits, isAddress, parseAbi } from 'viem';
-import { CHIPS_CONTRACT_ADDRESS, PPDC_CONTRACT_ADDRESS } from 'privatepoker-hooks/lib/chain';
-import { useChainPolling } from 'privatepoker-hooks/hooks/useChainPolling';
+import { formatUnits, isAddress } from 'viem';
+import { CHIPS_ABI } from 'privatepoker-hooks/blockchain/abi';
+import { CHIPS_CONTRACT_ADDRESS, PPDC_CONTRACT_ADDRESS } from 'privatepoker-hooks/config/chain';
+import { useChainPolling } from 'privatepoker-hooks/react/hooks/useChainPolling';
 
 const PPDC = 'PPDC';
-
-const CHIPS_ABI = parseAbi([
-  "function balanceOf(address account) view returns (uint256)",
-]);
 
 function formatPpdcBalance(balance) {
   return Number(formatUnits(balance, 6)).toFixed(2);
