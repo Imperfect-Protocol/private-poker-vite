@@ -18,6 +18,7 @@ import { MESH_ENDPOINTS, MESH_ICE_SERVERS } from '@/lib/mesh';
 const SUBSCRIPTION_STATE = {
   CREATED: 'Created',
   OFFER_TIMEOUT: 'OfferTimeout',
+  PEER_WAITING: 'PeerWaiting',
   CONNECTED: 'Connected',
   DISCONNECTED: 'Disconnected',
 };
@@ -134,6 +135,7 @@ class VirtualNetworkActivityVisibility {
   static shouldDisplay(event) {
     return (
       VirtualNetworkActivityVisibility.isVisibleConnectionStep(event)
+      || event?.type === 'PeerWaiting'
       || VirtualNetworkActivityVisibility.isSessionDescriptionMessage(event)
     );
   }
@@ -267,7 +269,7 @@ export class PokerRtcSession {
         iceServers: MESH_ICE_SERVERS,
         broadcastPrefix: 'private-poker',
         role: 'table',
-        routeOracle: (route) => this.routeStore.hasPeerRoute({
+        routeOracle: (route) => this.routeStore.hasLivePeerRoute({
           ownerAddress: this.config.playerAddress,
           peerAddress: route.peerAddress,
           lobbyId: route.lobbyId,
@@ -418,6 +420,10 @@ export class PokerRtcSession {
       this.handlePeerConnected(event);
       return;
     }
+    if (event.type === 'PeerWaiting') {
+      this.handlePeerWaiting(event);
+      return;
+    }
     if (event.type === 'PeerDisconnected') {
       this.handlePeerDisconnected(event);
       return;
@@ -458,6 +464,20 @@ export class PokerRtcSession {
     });
     if (!this.ready && this.getStatus() === 'connected') this.emitActivity('[Me]: Ready');
     this.ready = this.getStatus() === 'connected';
+    this.emitState();
+  }
+
+  handlePeerWaiting(event) {
+    const peerKey = normalizeAddress(event.peerAddress);
+    if (!peerKey) return;
+    if (this.subscription && normalizeAddress(this.subscription.playerAddress) === peerKey) {
+      this.subscription.state = SUBSCRIPTION_STATE.PEER_WAITING;
+      this.subscription.callback?.(this.getPlayerSeatNo(this.subscription.playerAddress), {
+        kind: 'network',
+        state: SUBSCRIPTION_STATE.PEER_WAITING,
+        playerAddress: this.subscription.playerAddress,
+      });
+    }
     this.emitState();
   }
 

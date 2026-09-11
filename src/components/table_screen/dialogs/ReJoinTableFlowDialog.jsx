@@ -8,6 +8,7 @@ const POKE_SEARCH_MS = 10000;
 
 const peerConnectionStatus = (state) => {
   if (state === 'Connected') return 'connected';
+  if (state === 'PeerWaiting') return 'peer found, waiting';
   if (state === 'Disconnected' || state === 'OfferTimeout') return 'not connected';
   if (state === 'AcceptSent' || state === 'AcceptReceived') return 'Connecting';
   if (state === 'OfferSent' || state === 'Created') return 'Searching';
@@ -16,6 +17,7 @@ const peerConnectionStatus = (state) => {
 
 const subscriptionStatus = (state) => {
   if (state === 'Connected') return 'peer subscribed';
+  if (state === 'PeerWaiting') return 'peer waiting';
   if (state === 'Disconnected' || state === 'OfferTimeout') return 'no subscribers';
   if (state === 'OfferSent' || state === 'AcceptSent' || state === 'AcceptReceived' || state === 'Created') return 'listening';
   return 'listening';
@@ -84,30 +86,40 @@ export default function ReJoinTableFlowDialog({
   const inboundStatus = peerConnectionStatus(networkSnapshot?.inboundState);
   const outboundStatus = subscriptionStatus(networkSnapshot?.outboundState);
   const isInboundConnected = networkSnapshot?.inboundState === 'Connected';
+  const isPeerWaiting = networkSnapshot?.inboundState === 'PeerWaiting';
   const isRtcConnecting = isRtcConnectingState(networkSnapshot?.inboundState);
   const canPokeInbound = signatureStatus === 'active'
     && !isInboundConnected
+    && !isPeerWaiting
     && !isSearchCycleActive;
   const shownInboundStatus = isInboundConnected
     ? 'connected'
     : isRtcConnecting || hasRtcConnecting
       ? 'Connecting'
+      : isPeerWaiting
+        ? inboundStatus
       : isSearchCycleActive
         ? 'Searching'
         : inboundStatus;
   const isComplete = signatureStatus === 'active'
     && inboundStatus === 'connected'
     && outboundStatus === 'peer subscribed';
+  const title = isPeerWaiting
+    ? 'Waiting For Peer'
+    : 'Joining P2P Network';
+  const description = isPeerWaiting
+    ? 'The other browser was found on the lobby P2P network. Waiting for the other player to open this table and accept the connection.'
+    : 'We will restore your table session and connect the inbound and outbound poker channels. The table stays locked until peers are connected.';
 
   useEffect(() => {
-    if (!isInboundConnected) return;
+    if (!isInboundConnected && !isPeerWaiting) return;
     if (pokeSearchTimerRef.current) {
       clearTimeout(pokeSearchTimerRef.current);
       pokeSearchTimerRef.current = null;
     }
     setHasRtcConnecting(false);
     setIsSearchCycleActive(false);
-  }, [isInboundConnected]);
+  }, [isInboundConnected, isPeerWaiting]);
 
   useEffect(() => {
     if (isRtcConnecting) setHasRtcConnecting(true);
@@ -121,8 +133,8 @@ export default function ReJoinTableFlowDialog({
 
   return (
     <FlowStepDialog
-      title="Joining P2P Network"
-      description="We will restore your table session and connect the inbound and outbound poker channels. The table stays locked until peers are connected."
+      title={title}
+      description={description}
       error={error}
       isComplete={isComplete}
       showOk={false}
