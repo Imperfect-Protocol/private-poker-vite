@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { hexToBytes } from 'viem';
 import {
   LobbyRouteKeeper,
@@ -58,11 +58,38 @@ class LobbyRouteActivity {
   }
 }
 
+class LobbyPeerWaitRequest {
+  constructor(event) {
+    this.requestId = event.requestId;
+    this.from = event.from;
+    this.to = event.to;
+    this.requesterRole = event.requesterRole;
+    this.requesterInstanceId = event.requesterInstanceId;
+    this.subscriptionLabel = event.subscriptionLabel;
+    this.channelLabel = event.channelLabel;
+    this.lobbyId = event.lobbyId;
+    this.tableId = event.tableId;
+    this.peerAddress = event.peerAddress;
+    this.waitingReason = event.waitingReason;
+  }
+
+  key() {
+    return [
+      this.requestId ?? '',
+      normalizeAddress(this.from),
+      normalizeAddress(this.to),
+      this.lobbyId ?? '',
+      this.tableId ?? '',
+    ].join(':');
+  }
+}
+
 export function useLobbyRouteKeeper(lobbyId) {
   const accountSessionContext = useAccountSession();
   const accountSession = accountSessionContext?.accountSession;
   const ownerAddress = accountSession?.walletAddress;
   const keeperRef = useRef(null);
+  const [waitingRequest, setWaitingRequest] = useState(null);
   const keeperKey = useMemo(() => [
     normalizeAddress(ownerAddress),
     lobbyId ?? '',
@@ -72,7 +99,12 @@ export function useLobbyRouteKeeper(lobbyId) {
     if (!ownerAddress || !lobbyId) return undefined;
 
     const keeper = new LobbyRouteKeeper(
-      (event) => LobbyRouteActivity.log(ownerAddress, event),
+      (event) => {
+        LobbyRouteActivity.log(ownerAddress, event);
+        if (event.type === 'PeerWaitRequest') {
+          setWaitingRequest(new LobbyPeerWaitRequest(event));
+        }
+      },
       ownerAddress,
       routeKeeperPrivateKey(accountSession),
       {
@@ -93,4 +125,22 @@ export function useLobbyRouteKeeper(lobbyId) {
       if (keeperRef.current === keeper) keeperRef.current = null;
     };
   }, [accountSession, keeperKey, lobbyId, ownerAddress]);
+
+  const acceptWaitingRequest = useCallback((request) => {
+    const activeRequest = request ?? waitingRequest;
+    keeperRef.current?.acceptWaitingRequest(activeRequest);
+    setWaitingRequest(null);
+  }, [waitingRequest]);
+
+  const rejectWaitingRequest = useCallback((request) => {
+    const activeRequest = request ?? waitingRequest;
+    keeperRef.current?.rejectWaitingRequest(activeRequest);
+    setWaitingRequest(null);
+  }, [waitingRequest]);
+
+  return {
+    waitingRequest,
+    acceptWaitingRequest,
+    rejectWaitingRequest,
+  };
 }

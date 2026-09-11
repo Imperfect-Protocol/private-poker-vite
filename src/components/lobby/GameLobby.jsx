@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { useLobbyRouteKeeper } from '@/hooks/useLobbyRouteKeeper';
+import PeerWaitRequestDialog from '@/components/lobby/PeerWaitRequestDialog';
 
 // 1. EXTRACTED COMPONENT: Prevents unmounting/remounting on every parent render
 const TableRow = ({ table, highlight = false, isJoined= false }) => {
@@ -63,7 +64,12 @@ const TableRow = ({ table, highlight = false, isJoined= false }) => {
 
 export default function GameLobby({ tables = [], lobbyId, userTables = [] }) {
   const [searchQuery, setSearchQuery] = useState('');
-  useLobbyRouteKeeper(lobbyId);
+  const routeKeeper = useLobbyRouteKeeper(lobbyId);
+
+  const acceptWaitingRequest = (request) => {
+    routeKeeper.acceptWaitingRequest(request);
+    window.open(`/tables/${request.tableId}?lobbyId=${request.lobbyId}`, '_blank', 'noopener,noreferrer');
+  };
 
   // 2. MEMOIZATION: Only recalculate arrays when data or search changes
   const { myTables, otherTables } = useMemo(() => {
@@ -85,6 +91,14 @@ export default function GameLobby({ tables = [], lobbyId, userTables = [] }) {
 
   return (
     <div className="flex flex-col gap-8 w-full">
+      {routeKeeper.waitingRequest && (
+        <PeerWaitRequestDialog
+          request={routeKeeper.waitingRequest}
+          onAccept={acceptWaitingRequest}
+          onLater={routeKeeper.rejectWaitingRequest}
+        />
+      )}
+
       {/* --- SECTION 1: MY ACTIVE SESSIONS --- */}
       {myTables.length > 0 && (
         <section aria-label="Your Active Sessions">

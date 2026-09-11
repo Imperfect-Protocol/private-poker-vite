@@ -13,6 +13,7 @@ const STATUS_STYLES = {
   connected: 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.8)]',
   complete: 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.8)]',
   error: 'bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.8)]',
+  rejected: 'bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.8)]',
   'not connected': 'bg-yellow-300 shadow-[0_0_14px_rgba(250,204,21,0.75)]',
   'peer subscribed': 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.8)]',
   'peer found, waiting': 'bg-blue-500 animate-pulse shadow-[0_0_16px_rgba(59,130,246,0.95)]',
@@ -34,6 +35,7 @@ const STATUS_TEXT_STYLES = {
   'peer waiting': 'text-blue-400',
   listening: 'text-sky-300',
   error: 'text-red-300',
+  rejected: 'text-red-300',
   'no subscribers': 'text-slate-400',
 };
 
@@ -74,8 +76,9 @@ export default function FlowStepDialog({
   okLabel = 'OK',
   canOkOnError = false,
   showOk = true,
+  canOkOverride = undefined,
 }) {
-  const canOk = isComplete || (canOkOnError && Boolean(error));
+  const canOk = canOkOverride ?? (isComplete || (canOkOnError && Boolean(error)));
 
   return (
     <TableDialogOverlay>

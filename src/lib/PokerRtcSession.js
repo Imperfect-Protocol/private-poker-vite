@@ -19,6 +19,7 @@ const SUBSCRIPTION_STATE = {
   CREATED: 'Created',
   OFFER_TIMEOUT: 'OfferTimeout',
   PEER_WAITING: 'PeerWaiting',
+  PEER_REJECTED: 'PeerRejected',
   CONNECTED: 'Connected',
   DISCONNECTED: 'Disconnected',
 };
@@ -136,6 +137,8 @@ class VirtualNetworkActivityVisibility {
     return (
       VirtualNetworkActivityVisibility.isVisibleConnectionStep(event)
       || event?.type === 'PeerWaiting'
+      || event?.type === 'PeerWaitAccepted'
+      || event?.type === 'PeerWaitRejected'
       || VirtualNetworkActivityVisibility.isSessionDescriptionMessage(event)
     );
   }
@@ -424,6 +427,10 @@ export class PokerRtcSession {
       this.handlePeerWaiting(event);
       return;
     }
+    if (event.type === 'PeerWaitRejected') {
+      this.handlePeerRejected(event);
+      return;
+    }
     if (event.type === 'PeerDisconnected') {
       this.handlePeerDisconnected(event);
       return;
@@ -475,6 +482,20 @@ export class PokerRtcSession {
       this.subscription.callback?.(this.getPlayerSeatNo(this.subscription.playerAddress), {
         kind: 'network',
         state: SUBSCRIPTION_STATE.PEER_WAITING,
+        playerAddress: this.subscription.playerAddress,
+      });
+    }
+    this.emitState();
+  }
+
+  handlePeerRejected(event) {
+    const peerKey = normalizeAddress(event.peerAddress);
+    if (!peerKey) return;
+    if (this.subscription && normalizeAddress(this.subscription.playerAddress) === peerKey) {
+      this.subscription.state = SUBSCRIPTION_STATE.PEER_REJECTED;
+      this.subscription.callback?.(this.getPlayerSeatNo(this.subscription.playerAddress), {
+        kind: 'network',
+        state: SUBSCRIPTION_STATE.PEER_REJECTED,
         playerAddress: this.subscription.playerAddress,
       });
     }

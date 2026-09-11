@@ -9,6 +9,7 @@ const POKE_SEARCH_MS = 10000;
 const peerConnectionStatus = (state) => {
   if (state === 'Connected') return 'connected';
   if (state === 'PeerWaiting') return 'peer found, waiting';
+  if (state === 'PeerRejected') return 'rejected';
   if (state === 'Disconnected' || state === 'OfferTimeout') return 'not connected';
   if (state === 'AcceptSent' || state === 'AcceptReceived') return 'Connecting';
   if (state === 'OfferSent' || state === 'Created') return 'Searching';
@@ -18,6 +19,7 @@ const peerConnectionStatus = (state) => {
 const subscriptionStatus = (state) => {
   if (state === 'Connected') return 'peer subscribed';
   if (state === 'PeerWaiting') return 'peer waiting';
+  if (state === 'PeerRejected') return 'no subscribers';
   if (state === 'Disconnected' || state === 'OfferTimeout') return 'no subscribers';
   if (state === 'OfferSent' || state === 'AcceptSent' || state === 'AcceptReceived' || state === 'Created') return 'listening';
   return 'listening';
@@ -33,6 +35,7 @@ export default function ReJoinTableFlowDialog({
   networkSnapshot,
   onEnableNetwork,
   onReady,
+  onRejectedClose,
 }) {
   const startedRef = useRef(false);
   const readyRef = useRef(false);
@@ -87,10 +90,12 @@ export default function ReJoinTableFlowDialog({
   const outboundStatus = subscriptionStatus(networkSnapshot?.outboundState);
   const isInboundConnected = networkSnapshot?.inboundState === 'Connected';
   const isPeerWaiting = networkSnapshot?.inboundState === 'PeerWaiting';
+  const isPeerRejected = networkSnapshot?.inboundState === 'PeerRejected';
   const isRtcConnecting = isRtcConnectingState(networkSnapshot?.inboundState);
   const canPokeInbound = signatureStatus === 'active'
     && !isInboundConnected
     && !isPeerWaiting
+    && !isPeerRejected
     && !isSearchCycleActive;
   const shownInboundStatus = isInboundConnected
     ? 'connected'
@@ -98,28 +103,34 @@ export default function ReJoinTableFlowDialog({
       ? 'Connecting'
       : isPeerWaiting
         ? inboundStatus
+      : isPeerRejected
+        ? inboundStatus
       : isSearchCycleActive
         ? 'Searching'
         : inboundStatus;
   const isComplete = signatureStatus === 'active'
     && inboundStatus === 'connected'
     && outboundStatus === 'peer subscribed';
-  const title = isPeerWaiting
-    ? 'Waiting For Peer'
-    : 'Joining P2P Network';
-  const description = isPeerWaiting
-    ? 'The other browser was found on the lobby P2P network. Waiting for the other player to open this table and accept the connection.'
-    : 'We will restore your table session and connect the inbound and outbound poker channels. The table stays locked until peers are connected.';
+  const title = isPeerRejected
+    ? 'Peer Rejected'
+    : isPeerWaiting
+      ? 'Peer Notified'
+      : 'Joining P2P Network';
+  const description = isPeerRejected
+    ? 'The other player rejected your offer.'
+    : isPeerWaiting
+      ? 'The other peer was notified. Waiting for them to accept.'
+      : 'We will restore your table session and connect the inbound and outbound poker channels. The table stays locked until peers are connected.';
 
   useEffect(() => {
-    if (!isInboundConnected && !isPeerWaiting) return;
+    if (!isInboundConnected && !isPeerWaiting && !isPeerRejected) return;
     if (pokeSearchTimerRef.current) {
       clearTimeout(pokeSearchTimerRef.current);
       pokeSearchTimerRef.current = null;
     }
     setHasRtcConnecting(false);
     setIsSearchCycleActive(false);
-  }, [isInboundConnected, isPeerWaiting]);
+  }, [isInboundConnected, isPeerRejected, isPeerWaiting]);
 
   useEffect(() => {
     if (isRtcConnecting) setHasRtcConnecting(true);
@@ -137,7 +148,10 @@ export default function ReJoinTableFlowDialog({
       description={description}
       error={error}
       isComplete={isComplete}
-      showOk={false}
+      showOk={isPeerRejected}
+      okLabel="Close"
+      canOkOverride={isPeerRejected}
+      onOk={onRejectedClose}
       steps={[
         {
           id: 'signature',

@@ -546,6 +546,7 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
             setShowReJoinDialog(false);
             setReJoinDismissed(true);
           }}
+          onRejectedClose={handleCloseTab}
         />
       )}
 
