@@ -11,6 +11,7 @@ import { MESH_ENDPOINTS, MESH_ICE_SERVERS } from '@/lib/mesh';
 
 const BACKGROUND_TABLE_ID = '0';
 const CONNECTION_TIMEOUT_MS = 10_000;
+const LIVE_ROUTE_TTL_MS = 120_000;
 
 function normalizeAddress(value) {
   return String(value ?? '').toLowerCase();
@@ -115,6 +116,7 @@ export function useLobbyRouteKeeper(lobbyId) {
         iceServers: MESH_ICE_SERVERS,
         broadcastPrefix: 'private-poker',
         role: 'lobby',
+        liveRouteTtlMs: LIVE_ROUTE_TTL_MS,
       },
     );
     keeperRef.current = keeper;

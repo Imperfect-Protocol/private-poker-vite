@@ -14,12 +14,12 @@ export default function PeerWaitRequestDialog({ request, onAccept, onLater }) {
 
   return (
     <TableDialogOverlay>
-      <div className="border-b border-teal-500/20 bg-slate-950/50 p-6">
-        <p className="mb-1 font-mono text-xs uppercase tracking-[0.3em] text-teal-500">
+      <div className="border-b border-yellow-500/20 bg-slate-950/50 p-6">
+        <p className="mb-1 font-mono text-xs uppercase tracking-[0.3em] text-yellow-500">
           Private Poker
         </p>
         <h1 className="text-2xl font-black uppercase tracking-tighter text-white">
-          Peer Waiting
+          Return To Game
         </h1>
       </div>
 
@@ -32,14 +32,14 @@ export default function PeerWaitRequestDialog({ request, onAccept, onLater }) {
           <button
             type="button"
             onClick={() => onLater?.(request)}
-            className="rounded-lg border border-slate-600 bg-slate-900 px-4 py-3 text-xs font-black uppercase tracking-widest text-slate-300 transition-colors hover:border-slate-400 hover:text-white"
+            className="rounded-lg border border-yellow-400/70 bg-transparent px-4 py-3 text-xs font-black uppercase tracking-widest text-yellow-100 transition-colors hover:border-yellow-300 hover:bg-yellow-400/10 hover:text-white"
           >
             Later
           </button>
           <button
             type="button"
             onClick={() => onAccept?.(request)}
-            className="rounded-lg bg-teal-400 px-4 py-3 text-xs font-black uppercase tracking-widest text-slate-950 shadow-[0_0_20px_rgba(45,212,191,0.25)] transition-colors hover:bg-teal-300"
+            className="rounded-lg bg-yellow-400 px-4 py-3 text-xs font-black uppercase tracking-widest text-slate-950 shadow-[0_0_20px_rgba(250,204,21,0.28)] transition-colors hover:bg-yellow-300"
           >
             Accept
           </button>

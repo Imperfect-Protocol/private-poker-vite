@@ -7,6 +7,7 @@ import ActiveTableView from '@/components/table/ActiveTableView';
 import BuyInDialog from '@/components/table_screen/dialogs/BuyInDialog';
 import JoinTableFlowDialog from '@/components/table_screen/dialogs/JoinTableFlowDialog';
 import ReJoinTableFlowDialog from '@/components/table_screen/dialogs/ReJoinTableFlowDialog';
+import PeerWaitStatusDialog from '@/components/table_screen/dialogs/PeerWaitStatusDialog';
 import MediaDataChannelDialog from '@/components/table_screen/dialogs/MediaDataChannelDialog';
 import TerminalResultDialog from '@/components/table_screen/dialogs/TerminalResultDialog';
 import TopUpOperatorGasDialog from '@/components/table_screen/dialogs/TopUpOperatorGasDialog';
@@ -302,6 +303,15 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
     DebugMessageList.merge(messages, pokerTableState.gameMessages)
   ), [messages, pokerTableState.gameMessages]);
   const p2pEstablished = table.networkSnapshot?.status === 'connected';
+  const peerDecisionState = table.networkSnapshot?.inboundState;
+  const showPeerWaitStatusDialog = (
+    table.hasJoinedTable
+    && showReJoinDialog
+    && !forceHideReJoinDialog
+    && !joinRequest
+    && !p2pEstablished
+    && (peerDecisionState === 'PeerWaiting' || peerDecisionState === 'PeerRejected')
+  );
   const consoleIdentity = useMemo(() => {
     const playerAddress = table.currentSeat?.playerAddress;
     const displayName = getPlayerDisplayname(playerAddress) || 'Console';
@@ -537,7 +547,15 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
         />
       )}
 
-      {table.hasJoinedTable && showReJoinDialog && !forceHideReJoinDialog && !joinRequest && !p2pEstablished && (
+      {showPeerWaitStatusDialog && (
+        <PeerWaitStatusDialog
+          status={peerDecisionState}
+          peerAddress={table.networkSnapshot?.inboundPeerAddress}
+          onClose={handleCloseTab}
+        />
+      )}
+
+      {table.hasJoinedTable && showReJoinDialog && !forceHideReJoinDialog && !joinRequest && !p2pEstablished && !showPeerWaitStatusDialog && (
         <ReJoinTableFlowDialog
           table={table}
           networkSnapshot={table.networkSnapshot}
@@ -546,7 +564,6 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
             setShowReJoinDialog(false);
             setReJoinDismissed(true);
           }}
-          onRejectedClose={handleCloseTab}
         />
       )}
 
