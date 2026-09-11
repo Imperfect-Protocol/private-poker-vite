@@ -1,80 +1,60 @@
-The Vite P2P connection flow is mostly here:
+# Private Poker P2P Boundary
 
-1. Table decides who to connect to:
-[useTable.js](../src/hooks/useTable.js#L110)
+`private-poker-vite` no longer owns raw WebRTC signalling code. The app uses the standalone
+`privatepoker-p2p` package for connection establishment, mesh fallback, P2P relay, route
+preservation, and connection-state events.
 
-It selects the previous occupied seat in the ring, then calls `subscribeToPreviousSeat()`:
-[useTable.js](../src/hooks/useTable.js#L131)
+## App Responsibilities
 
-2. Network hook owns the `PokerRtcSession`:
-[useNetwork.js](../src/hooks/useNetwork.js#L100)
+The Vite app owns poker-specific orchestration:
 
-It wires callbacks into the session:
-[useNetwork.js](../src/hooks/useNetwork.js#L184)
+- `src/hooks/useTable.js` chooses the previous occupied seat in the token-ring topology.
+- `src/hooks/useNetwork.js` prepares deterministic table BLS keys and wires React callbacks.
+- `src/lib/PokerRtcSession.js` adapts poker transport messages to `VirtualNetwork.subscribe()`
+  and `VirtualNetwork.send()`.
+- `src/hooks/useLobbyRouteKeeper.js` starts the lobby background route keeper while the lobby
+  tab is open.
 
-It listens for incoming mesh signals:
-[useNetwork.js](../src/hooks/useNetwork.js#L226)
+Poker messages are BLS-signed in `PokerRtcSession` before they are sent. Incoming poker messages
+are verified against the announce public key stored on-chain before they are passed into the
+table state machine.
 
-And exposes `subscribeTo()` which starts the RTC offer:
-[useNetwork.js](../src/hooks/useNetwork.js#L255)
+## Library Responsibilities
 
-3. WebRTC offer creation:
-[PokerRtcSession.js](../src/lib/PokerRtcSession.js#L1132)
+The `privatepoker-p2p` package owns P2P mechanics:
 
-Important lines:
-- creates `RTCPeerConnection`: [PokerRtcSession.js](../src/lib/PokerRtcSession.js#L1012)
-- creates data channel: [PokerRtcSession.js](../src/lib/PokerRtcSession.js#L1054)
-- creates SDP offer: [PokerRtcSession.js](../src/lib/PokerRtcSession.js#L1164)
-- sends encrypted offer via local pool or Private Mesh fallback: [PokerRtcSession.js](../src/lib/PokerRtcSession.js#L1173)
+- `VirtualNetwork.subscribe(subscriptionLabel, channelLabel, peerAddress, timeout, lobbyId, tableId)`
+  establishes a WebRTC data channel.
+- `VirtualNetwork.send(channelLabel, message)` sends application data over the established channel.
+- `LobbyRouteKeeper` maintains lobby-level background P2P routes with `tableId=0`.
+- `RouteStore` records active background routes so new table tabs can try P2P first.
+- `RouteBus` carries local route-preservation requests between table tabs and the lobby tab.
+- The library control worker registers lobby presence immediately as `role=lobby`, `tableId=0`,
+  so control messages have a concrete lobby endpoint to route to before any visible table
+  subscription is active.
 
-4. Signal encryption:
-[PokerRtcSession.js](../src/lib/PokerRtcSession.js#L1069)
+## Runtime Flow
 
-This wraps the SDP signal with sender address/pubkey, encrypts to peer announce public key, then sends opaque hex:
-[crypto.js](../src/lib/crypto.js#L34)
+```mermaid
+sequenceDiagram
+  participant Table as Table tab
+  participant P2P as privatepoker-p2p
+  participant Mesh as Private Mesh
+  participant Lobby as Lobby tab
 
-Actual BLS-ish ephemeral encryption primitive:
-[signal_crypto.js](../src/lib/crum_bls/signal_crypto.js#L23)
+  Table->>P2P: subscribe("inbound", "outbound", peer, 10s)
+  alt route exists
+    P2P->>P2P: try P2P network first
+  else no route exists
+    P2P->>Mesh: announce via mesh fallback
+  end
+  P2P-->>Table: PeerConnected
+  Table->>P2P: RouteBus.keep-route
+  P2P-->>Lobby: PreserveRouteAccepted
+  Lobby->>P2P: register worker presence as lobby/tableId=0
+  Lobby->>P2P: subscribe(lobby route, peer, tableId=0)
+  P2P-->>Lobby: PeerConnected
+```
 
-5. Private Mesh publishing/listening:
-[usePrivatePokerSignal.js](../src/hooks/usePrivatePokerSignal.js#L27)
-
-Incoming mesh subscription:
-[usePrivatePokerSignal.js](../src/hooks/usePrivatePokerSignal.js#L78)
-
-Long-poll implementation:
-[privateMesh.js](../src/lib/privateMesh.js#L182)
-
-Sending bootstrap messages:
-[privateMesh.js](../src/lib/privateMesh.js#L219)
-
-Receiving messages and emitting them to listeners:
-[privateMesh.js](../src/lib/privateMesh.js#L188)
-
-6. Incoming offer/answer handling:
-[PokerRtcSession.js](../src/lib/PokerRtcSession.js#L1351)
-
-It decrypts the mesh payload:
-[PokerRtcSession.js](../src/lib/PokerRtcSession.js#L1370)
-
-Then dispatches to:
-[PokerRtcSession.js](../src/lib/PokerRtcSession.js#L1309)
-
-Offer path creates answer:
-[PokerRtcSession.js](../src/lib/PokerRtcSession.js#L1263)
-
-Answer path applies remote description:
-[PokerRtcSession.js](../src/lib/PokerRtcSession.js#L1340)
-
-7. Mesh endpoint config:
-[index.js](../src/lib/mesh/index.js#L9)
-
-Main:
-[main.js](../src/lib/mesh/main.js#L1)
-
-Dev localhost:
-[dev.js](../src/lib/mesh/dev.js#L1)
-
-So the short protocol is:
-
-`useTable` picks previous ring peer -> `useNetwork.subscribeTo()` -> `PokerRtcSession.sendOffer()` -> encrypt SDP offer to peer announce pubkey -> try local `RtcSessionPool` route -> fallback to Private Mesh long-poll `/mesh` -> peer receives encrypted payload -> decrypts -> creates SDP answer -> sends encrypted accept back -> original peer applies remote answer -> data channel opens.
+On later table rejoins, `PokerRtcSession` asks `RouteStore` whether the lobby has a background
+route to the peer. If yes, `VirtualNetwork` starts with P2P signalling instead of mesh.

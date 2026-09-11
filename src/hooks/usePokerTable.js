@@ -1117,6 +1117,7 @@ export function usePokerTable({
   }, [senderForSeat]);
 
   const appendGameLog = useCallback((line, sender = 'Game', level = 'info') => {
+    console.debug('[PrivatePoker debug]', { sender, text: line, level });
     setGameMessages((prev) => [...prev, { text: line, sender, level }].slice(-160));
   }, []);
 
