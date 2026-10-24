@@ -20,7 +20,7 @@ export default function MediaDataChannelDialog({ onClose }) {
         <button
           type="button"
           onClick={onClose}
-          className="w-full py-3 rounded-lg bg-teal-500 text-slate-950 font-black hover:bg-teal-400 transition-colors uppercase text-xs tracking-widest shadow-[0_0_20px_rgba(20,184,166,0.3)] cursor-pointer"
+          className="w-full py-3 rounded-lg bg-ember-500 text-slate-950 font-black hover:bg-ember-400 transition-colors uppercase text-xs tracking-widest shadow-[0_0_20px_rgba(255,165,0,0.3)] cursor-pointer"
         >
           OK
         </button>

@@ -1,39 +1,99 @@
 @import "tailwindcss";
 
-/* :root {
-  --background: #ffffff;
-  --foreground: #171717;
-} */
+/*
+ * Color theme shared with private-poker-coming-soon (app/globals.css).
+ * Components keep Tailwind's palette names as theme slots; these values
+ * retune the slots to the coming-soon palette:
+ *   slate -> crimson-black neutrals: black, panel, cream text, muted copy
+ *   teal  -> crimson accent: red-hot, red, red-deep
+ *   cyan  -> gold accent: gold-cream, coin gold
+ * ember is the yellow-orange used by buttons.
+ */
+@theme {
+  --color-slate-50: #fff7f8;
+  --color-slate-100: #fff1f2; /* cream */
+  --color-slate-200: #ffe4e8;
+  --color-slate-300: #f3cbd2;
+  --color-slate-400: #d6a0aa; /* muted */
+  --color-slate-500: #8f656c;
+  --color-slate-600: #6d494e;
+  --color-slate-700: #56363a;
+  --color-slate-800: #3a2023;
+  --color-slate-900: #211012; /* panel */
+  --color-slate-950: #090506; /* black */
+
+  --color-teal-50: #fff1f2;
+  --color-teal-100: #ffe4e6;
+  --color-teal-200: #fecdd3;
+  --color-teal-300: #ff8fa3;
+  --color-teal-400: #ff6b86;
+  --color-teal-500: #ff385c; /* red-hot */
+  --color-teal-600: #e11d48; /* red */
+  --color-teal-700: #be123c;
+  --color-teal-800: #9f1239;
+  --color-teal-900: #7f1025; /* red-deep */
+  --color-teal-950: #4c0519;
+
+  --color-cyan-50: #fffced;
+  --color-cyan-100: #fff8da;
+  --color-cyan-200: #fff2c2; /* gold-cream */
+  --color-cyan-300: #fde68a;
+  --color-cyan-400: #facc15; /* coin gold */
+  --color-cyan-500: #eab308;
+  --color-cyan-600: #d97706;
+  --color-cyan-700: #b45309;
+  --color-cyan-800: #92400e;
+  --color-cyan-900: #7c2d12;
+  --color-cyan-950: #2a1005;
+
+  --color-ember-200: #ffe2a8;
+  --color-ember-400: #ffbb33;
+  --color-ember-500: #ffa500;
+  --color-ember-600: #ff5a1f;
+}
+
+/* Unlayered so it wins over per-field text utilities; matches the navbar PPDC balance. */
+input,
+textarea,
+select {
+  color: var(--color-cyan-300);
+}
+
+/* Coming-soon page backdrop: crimson glow over an oxblood diagonal. */
+@utility bg-page {
+  background:
+    radial-gradient(circle at 18% 12%, rgba(225, 29, 72, 0.22), transparent 32rem),
+    linear-gradient(135deg, #090506 0%, #16090b 52%, #270b12 100%);
+}
 
 :root {
-  background-color: #020617; /* Matches slate-950 */
-  color: white;
+  background-color: var(--color-slate-950);
+  color: var(--color-slate-100);
 }
 
 /* Firefox Support */
 .custom-scrollbar {
   scrollbar-width: thin;
-  scrollbar-color: #0d9488 #020617; /* Thumb color, then track color */
+  scrollbar-color: var(--color-teal-600) var(--color-slate-950); /* Thumb color, then track color */
 }
 
-/* Custom Cyberpunk Scrollbar */
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
-  background: #020617; /* Matches slate-950 */
+  background: var(--color-slate-950);
   border-radius: 8px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #0d9488; /* Matches teal-600 */
+  background: var(--color-teal-600);
   border-radius: 8px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #2dd4bf; /* Matches teal-400 */
+  background: var(--color-teal-500);
 }
 
 @keyframes payoutPulse {

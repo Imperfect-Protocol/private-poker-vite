@@ -44,11 +44,11 @@ export default function Splash() {
   return (
     <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950">
       <div className="absolute inset-0 z-0">
-        <img src="/splash.jpg" alt="Splash Background" className="w-full h-full object-cover opacity-20" />
-        <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/80 to-slate-950/30" />
+        <img src="/splash.jpg" alt="Splash Background" className="w-full h-full object-cover opacity-55 filter-[grayscale(0.35)_sepia(0.4)_hue-rotate(300deg)_saturate(1.4)_brightness(0.64)]" />
+        <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(9,5,6,0.28),#090506_95%),radial-gradient(circle,rgba(225,29,72,0.2),transparent_34rem)]" />
       </div>
       <div className={`relative z-10 text-center flex flex-col items-center transition-all duration-700 ease-in-out ${fadeLogo ? '-translate-y-3 opacity-0' : 'translate-y-0 opacity-100'}`}>
-        <h1 className="text-5xl md:text-7xl font-black text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-cyan-400 tracking-tighter uppercase mb-4 drop-shadow-[0_0_25px_rgba(20,184,166,0.6)]">
+        <h1 className="text-5xl md:text-7xl font-black text-slate-50 tracking-tighter uppercase mb-4 drop-shadow-[0_0_34px_rgba(225,29,72,0.55)]">
           Private Poker
         </h1>
         <div className="border-t border-teal-500/50 pt-3 px-8">

@@ -49,7 +49,7 @@ flowchart LR
 
 ## Procedure
 
-1. The player clicks `Return` from `Your Active Protocols`, or opens the table from a peer waiting dialog.
+1. The player clicks `Return` from `Your Tables`, or opens the table from a peer waiting dialog.
 2. The table route loads table detail and player seating status.
 3. If the player is seated and P2P is not connected, the rejoin dialog opens.
 4. The app prepares the network session and verifies that the generated announce key matches the on-chain key.

@@ -12,7 +12,7 @@ function accessMessage(accountStatus) {
   if (accountStatus === ACCOUNT_STATUS.BANNED) return 'Your account has been banned.';
   if (accountStatus === ACCOUNT_STATUS.DELETED) return 'Your account has been deleted.';
   if (accountStatus === ACCOUNT_STATUS.UNVERIFIED) {
-    return 'Your account needs to be verified. Send an email to imperfect-protocol@protonmail.com.';
+    return 'Your account needs to be verified. Send an email to verify@contact.imperfectprotocol.ie.';
   }
   return 'Sign in with a verified account and active subscription to enter this area.';
 }

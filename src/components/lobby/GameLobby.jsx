@@ -36,7 +36,7 @@ const TableRow = ({ table, highlight = false, isJoined= false }) => {
 
       <td className={`px-4 py-4 bg-slate-900/60 backdrop-blur-sm border-y transition-all text-center ${highlight ? 'border-yellow-500/50' : 'border-teal-500/20 group-hover:border-teal-400 group-hover:bg-slate-900'}`}>
         <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border tracking-wider ${isJoined ? 'border-yellow-500 text-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.3)]' :
-          state === 'seating' ? 'border-teal-500 text-teal-400 shadow-[0_0_8px_rgba(20,184,166,0.3)]' :
+          state === 'seating' ? 'border-teal-500 text-teal-400 shadow-[0_0_8px_rgba(225,29,72,0.3)]' :
             'border-amber-500/50 text-amber-500'
           }`}>
           {isJoined ? 'ACTIVE' : state}
@@ -51,8 +51,8 @@ const TableRow = ({ table, highlight = false, isJoined= false }) => {
           className={`inline-block px-5 py-2 rounded-lg font-bold text-xs uppercase tracking-widest transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 ${isJoined
             ? 'bg-yellow-500 text-slate-950 hover:bg-yellow-400 shadow-[0_0_15px_rgba(234,179,8,0.4)] focus-visible:ring-yellow-400'
             : (isPlaying || isFull)
-              ? 'bg-slate-900 text-teal-500 border border-teal-500/50 hover:border-teal-400 focus-visible:ring-teal-500'
-              : 'bg-teal-400 text-slate-950 hover:bg-teal-300 shadow-[0_0_15px_rgba(20,184,166,0.4)] focus-visible:ring-teal-400'
+              ? 'bg-slate-900 text-ember-600 border border-ember-600/60 hover:border-ember-600 focus-visible:ring-ember-600'
+              : 'bg-ember-500 text-slate-950 hover:bg-ember-400 shadow-[0_0_15px_rgba(255,165,0,0.4)] focus-visible:ring-ember-400'
             }`}
         >
           {isJoined ? "Return" : isPlaying || isFull ? 'Watch' : 'Join'}
@@ -109,7 +109,7 @@ export default function GameLobby({ tables = [], lobbyId, userTables = [] }) {
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-3 w-3 bg-yellow-500"></span>
                 </span>
-                Your Active Protocols
+                Your Tables
               </h2>
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-separate border-spacing-y-2 min-w-[600px]">
@@ -127,7 +127,7 @@ export default function GameLobby({ tables = [], lobbyId, userTables = [] }) {
 
       {/* --- SECTION 2: DISCOVER TABLES --- */}
       <section aria-label="Available Tables">
-        <div className="p-1 bg-gradient-to-br from-teal-500/80 to-cyan-600/80 rounded-2xl shadow-[0_0_30px_rgba(20,184,166,0.15)] transition-all hover:shadow-[0_0_40px_rgba(20,184,166,0.25)]">
+        <div className="p-1 bg-gradient-to-br from-teal-500/80 to-cyan-600/80 rounded-2xl shadow-[0_0_30px_rgba(225,29,72,0.15)] transition-all hover:shadow-[0_0_40px_rgba(225,29,72,0.25)]">
           <div className="p-6 bg-slate-950/95 backdrop-blur-md rounded-[14px] overflow-hidden">
 
             <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-6 gap-4">
@@ -142,7 +142,7 @@ export default function GameLobby({ tables = [], lobbyId, userTables = [] }) {
                   href={`/tables/create?lobbyId=${lobbyId}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="whitespace-nowrap px-6 py-3 rounded-lg font-bold text-xs uppercase tracking-widest bg-slate-900 border-2 border-teal-400 text-teal-400 hover:bg-teal-400 hover:text-slate-950 transition-all shadow-[0_0_15px_rgba(45,212,191,0.15)] hover:shadow-[0_0_20px_rgba(45,212,191,0.5)] focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                  className="whitespace-nowrap px-6 py-3 rounded-lg font-bold text-xs uppercase tracking-widest bg-slate-900 border-2 border-ember-400 text-ember-400 hover:bg-ember-400 hover:text-slate-950 transition-all shadow-[0_0_15px_rgba(255,165,0,0.15)] hover:shadow-[0_0_20px_rgba(255,165,0,0.5)] focus:outline-none focus-visible:ring-2 focus-visible:ring-ember-400"
                 >
                   + Create New Table
                 </a>
@@ -151,7 +151,7 @@ export default function GameLobby({ tables = [], lobbyId, userTables = [] }) {
                 <div className="relative w-full md:w-80 group flex-shrink-0">
                   <input
                     type="search"
-                    placeholder="SEARCH PROTOCOL..."
+                    placeholder="SEARCH TABLES..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="w-full h-full min-h-[44px] bg-slate-900 border border-teal-500/30 text-teal-400 text-xs font-mono px-4 rounded-lg focus:outline-none focus:border-teal-400 focus:ring-1 focus:ring-teal-400 placeholder-teal-700/50 transition-all shadow-inner"
@@ -164,7 +164,7 @@ export default function GameLobby({ tables = [], lobbyId, userTables = [] }) {
 
             <div className="overflow-auto max-h-[420px] pr-2 custom-scrollbar">
               <table className="w-full text-left border-separate border-spacing-y-3 min-w-[600px]">
-                <thead className="sticky top-0 bg-slate-950/95 backdrop-blur-md z-10 shadow-[0_10px_10px_-5px_rgba(2,6,23,0.8)]">
+                <thead className="sticky top-0 bg-slate-950/95 backdrop-blur-md z-10 shadow-[0_10px_10px_-5px_rgba(9,5,6,0.8)]">
                   <tr className="text-teal-500/60 text-[10px] uppercase tracking-[0.2em] font-bold">
                     <th scope="col" className="px-4 py-3 font-medium">Session</th>
                     <th scope="col" className="px-4 py-3 text-center font-medium">Stakes</th>

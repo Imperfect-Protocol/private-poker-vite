@@ -75,7 +75,7 @@ export default function AgeGateDialog({ isFading = false, onAdultConfirmed, onUn
 
   return (
     <form
-      className={`relative z-20 w-[min(420px,calc(100%_-_2rem))] rounded-2xl border border-teal-400/30 bg-slate-950/90 p-6 text-center shadow-[0_0_60px_rgba(20,184,166,0.16)] backdrop-blur-md transition-all duration-700 ${isFading ? 'translate-y-3 opacity-0' : 'translate-y-0 opacity-100'}`}
+      className={`relative z-20 w-[min(420px,calc(100%_-_2rem))] rounded-2xl border border-teal-400/30 bg-slate-950/90 p-6 text-center shadow-[0_0_60px_rgba(225,29,72,0.16)] backdrop-blur-md transition-all duration-700 ${isFading ? 'translate-y-3 opacity-0' : 'translate-y-0 opacity-100'}`}
       onSubmit={handleSubmit}
     >
       <label htmlFor="age-gate-date" className="block text-sm font-bold text-slate-100">
@@ -100,7 +100,7 @@ export default function AgeGateDialog({ isFading = false, onAdultConfirmed, onUn
       ) : null}
       <button
         type="submit"
-        className="mt-5 rounded-lg border border-teal-400/60 bg-teal-400/10 px-8 py-3 font-mono text-xs font-black uppercase tracking-[0.28em] text-teal-200 transition-colors hover:bg-teal-400/20 hover:text-white"
+        className="mt-5 rounded-lg border border-ember-400/60 bg-ember-400/10 px-8 py-3 font-mono text-xs font-black uppercase tracking-[0.28em] text-ember-200 transition-colors hover:bg-ember-400/20 hover:text-white"
       >
         OK
       </button>

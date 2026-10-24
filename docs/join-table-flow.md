@@ -88,7 +88,7 @@ flowchart TD
 - The player becomes seated at the table.
 - The lobby eventually moves the table from open to running once all seats are filled.
 - The player is prompted to join the P2P network before gameplay proceeds.
-- The table appears in `Your Active Protocols` for the player while it is active.
+- The table appears in `Your Tables` for the player while it is active.
 
 ## Waiting And Error States
 

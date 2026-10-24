@@ -100,7 +100,7 @@ export default function WalletAuth() {
   return (
     <button
       onClick={() => open()}
-      className="px-6 py-2 bg-slate-900 border border-teal-500/50 text-teal-400 font-bold text-[0.8em] uppercase tracking-widest rounded hover:bg-teal-500 hover:text-slate-950 transition-all active:scale-95 shadow-[0_0_15px_rgba(20,184,166,0.1)]"
+      className="px-6 py-2 bg-slate-900 border border-ember-500/50 text-ember-400 font-bold text-[0.8em] uppercase tracking-widest rounded hover:bg-ember-500 hover:text-slate-950 transition-all active:scale-95 shadow-[0_0_15px_rgba(255,165,0,0.1)]"
     >
       Connect Wallet...
     </button>

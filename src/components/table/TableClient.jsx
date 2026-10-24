@@ -435,7 +435,7 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
 
   if (table.isLoading || !table.tableData) {
     return (
-      <main className="min-h-screen bg-slate-950 flex items-center justify-center">
+      <main className="min-h-screen bg-page flex items-center justify-center">
         <div />
       </main>
     );

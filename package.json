@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:dev": "NEXT_PUBLIC_PRIVATE_POKER_CHAIN=devnode NEXT_PUBLIC_PRIVATE_POKER_MESH=dev vite",
+    "dev:devmesh": "NEXT_PUBLIC_PRIVATE_POKER_MESH=dev vite",
     "build": "vite build && vite build --ssr server/standalone-entry.js --outDir dist/server --emptyOutDir false",
     "build-wasmer": "npm run build && cp wasmer.toml app.yaml ./dist",
     "lint": "eslint .",

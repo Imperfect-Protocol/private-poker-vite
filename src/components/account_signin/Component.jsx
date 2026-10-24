@@ -10,7 +10,7 @@ function formatAddress(address) {
 
 function TierCard({ tier, selected, onSelect }) {
   const accentClass = selected
-    ? 'border-teal-300 bg-teal-400/10 shadow-[0_0_28px_rgba(45,212,191,0.18)]'
+    ? 'border-teal-300 bg-teal-400/10 shadow-[0_0_28px_rgba(255,75,104,0.18)]'
     : 'border-teal-500/15 bg-slate-900/70 hover:border-teal-400/50 hover:bg-slate-900';
 
   return (
@@ -66,7 +66,7 @@ function AccountStatusPanel({ status }) {
     if (status === ACCOUNT_STATUS.SUSPENDED) return 'Your account has been suspended.';
     if (status === ACCOUNT_STATUS.BANNED) return 'Your account has been banned.';
     if (status === ACCOUNT_STATUS.DELETED) return 'Your account has been deleted.';
-    return 'Your account needs to be verified. Send an email to imperfect-protocol@protonmail.com.';
+    return 'Your account needs to be verified. Send an email to verify@contact.imperfectprotocol.ie.';
   })();
 
   return (
@@ -120,11 +120,11 @@ export default function AccountSignin() {
 
   return (
     <>
-    <main className="min-h-screen bg-slate-950 px-4 py-10 md:px-12">
+    <main className="min-h-screen px-4 py-10 md:px-12">
       <div className="mx-auto grid min-h-[calc(100vh-7rem)] w-full max-w-6xl grid-cols-1 gap-8 lg:grid-cols-[0.88fr_1.12fr] lg:items-center">
         <section className="relative overflow-hidden rounded border border-teal-500/15 bg-slate-900/70 p-8 shadow-2xl">
           <div className="absolute inset-0">
-            <img src="/splash.jpg" alt="" className="h-full w-full object-cover opacity-15" />
+            <img src="/splash.jpg" alt="" className="h-full w-full object-cover opacity-15 filter-[grayscale(0.1)_sepia(0.5)_hue-rotate(305deg)_saturate(1.55)_brightness(0.7)]" />
             <div className="absolute inset-0 bg-gradient-to-br from-slate-950 via-slate-950/85 to-teal-950/30" />
           </div>
 
@@ -202,7 +202,7 @@ export default function AccountSignin() {
                 type="button"
                 onClick={handleSignin}
                 disabled={isSigningIn}
-                className="mt-6 w-full cursor-pointer rounded border border-teal-400 bg-teal-400 px-6 py-4 font-black uppercase tracking-[0.18em] text-slate-950 transition-all hover:bg-teal-300 disabled:cursor-wait disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500"
+                className="mt-6 w-full cursor-pointer rounded border border-ember-500 bg-ember-500 px-6 py-4 font-black uppercase tracking-[0.18em] text-slate-950 transition-all hover:bg-ember-400 disabled:cursor-wait disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500"
               >
                 {!isWalletConnected ? 'Connect Wallet' : isSigningIn ? 'Signing...' : 'Sign In'}
               </button>
@@ -276,7 +276,7 @@ export default function AccountSignin() {
                   type="button"
                   onClick={handleProfileSave}
                   disabled={isSavingProfile}
-                  className="mt-6 w-full cursor-pointer rounded border border-teal-400 bg-teal-400 px-6 py-4 font-black uppercase tracking-[0.18em] text-slate-950 transition-all hover:bg-teal-300 disabled:cursor-wait disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500"
+                  className="mt-6 w-full cursor-pointer rounded border border-ember-500 bg-ember-500 px-6 py-4 font-black uppercase tracking-[0.18em] text-slate-950 transition-all hover:bg-ember-400 disabled:cursor-wait disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500"
                 >
                   {isSavingProfile ? 'Saving...' : 'Continue'}
                 </button>
@@ -284,7 +284,7 @@ export default function AccountSignin() {
                 <button
                   type="button"
                   onClick={handleProfileContinue}
-                  className="mt-6 w-full cursor-pointer rounded border border-teal-400 bg-teal-400 px-6 py-4 font-black uppercase tracking-[0.18em] text-slate-950 transition-all hover:bg-teal-300"
+                  className="mt-6 w-full cursor-pointer rounded border border-ember-500 bg-ember-500 px-6 py-4 font-black uppercase tracking-[0.18em] text-slate-950 transition-all hover:bg-ember-400"
                 >
                   Continue
                 </button>
@@ -321,7 +321,7 @@ export default function AccountSignin() {
                 type="button"
                 onClick={handleContinue}
                 disabled={isSubscribing}
-                className="mt-6 w-full cursor-pointer rounded border border-teal-400 bg-teal-400 px-6 py-4 font-black uppercase tracking-[0.18em] text-slate-950 transition-all hover:bg-teal-300 disabled:cursor-wait disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500"
+                className="mt-6 w-full cursor-pointer rounded border border-ember-500 bg-ember-500 px-6 py-4 font-black uppercase tracking-[0.18em] text-slate-950 transition-all hover:bg-ember-400 disabled:cursor-wait disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500"
               >
                 {isSubscribing ? subscriptionStep : 'Continue'}
               </button>

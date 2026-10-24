@@ -74,7 +74,7 @@ export default class Slider extends ReactComponent {
       ? 'bg-slate-700 border-slate-500'
       : isHeat
         ? ''
-      : 'bg-teal-400 border-teal-200 shadow-[0_0_10px_rgba(45,212,191,0.8)]';
+      : 'bg-teal-400 border-teal-200 shadow-[0_0_10px_rgba(255,75,104,0.8)]';
     const handleClass = disabled ? 'bg-slate-700' : isHeat ? '' : 'bg-teal-300';
     const handleStyle = isHeat
       ? {
@@ -108,7 +108,7 @@ export default class Slider extends ReactComponent {
 
         {!hideHandle && (
           <div
-            className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-5 h-5 ${handleClass} rotate-45 border border-slate-950 shadow-[0_0_15px_rgba(45,212,191,1)] pointer-events-none transition-all duration-75 z-20`}
+            className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-5 h-5 ${handleClass} rotate-45 border border-slate-950 shadow-[0_0_15px_rgba(255,75,104,1)] pointer-events-none transition-all duration-75 z-20`}
             style={{ left: `${percentFill}%`, ...handleStyle }}
           />
         )}

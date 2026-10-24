@@ -19,14 +19,14 @@ export default function Avatar({
   const videoRef = useRef(null);
   const audioRef = useRef(null);
   const borderClass = isEmptySeat
-    ? 'border-dashed border-[#303948]/70 shadow-none'
+    ? 'border-dashed border-slate-700/70 shadow-none'
     : isWinner
       ? 'border-4 border-yellow-200 shadow-[0_0_30px_rgba(250,204,21,0.85),0_0_14px_rgba(255,237,213,0.72),inset_0_0_18px_rgba(250,204,21,0.2)]'
       : isTheirTurn
         ? 'border-amber-300 shadow-[0_0_30px_rgba(245,158,11,0.68),0_0_12px_rgba(251,191,36,0.45),inset_0_0_18px_rgba(245,158,11,0.18)]'
         : isMe
-          ? 'border-[#5d6c84] shadow-[0_0_22px_rgba(96,116,145,0.42),inset_0_0_18px_rgba(68,82,104,0.22)]'
-          : 'border-[#435064]/90 shadow-[0_0_16px_rgba(59,74,96,0.36),inset_0_0_14px_rgba(96,116,145,0.16)]';
+          ? 'border-slate-200/70 shadow-[0_0_22px_rgba(255,75,104,0.48),inset_0_0_18px_rgba(255,225,231,0.22)]'
+          : 'border-slate-200/50 shadow-[0_0_18px_rgba(255,75,104,0.36),inset_0_0_14px_rgba(255,225,231,0.16)]';
 
   const displayName = player.displayName?.startsWith?.('0x') ? '' : player.displayName;
   const nameParts = displayName?.split(/\s+/).filter(Boolean) ?? [];
@@ -68,12 +68,12 @@ export default function Avatar({
     <div className="relative z-10">
       <button
         type="button"
-        className={`${sizeClass} rounded-full bg-[#080d16] border-2 ${borderClass} flex items-center justify-center relative overflow-hidden group-hover:scale-110 transition-transform ${canToggleWebcam ? 'cursor-pointer' : 'cursor-default'}`}
+        className={`${sizeClass} rounded-full bg-slate-950 border-2 ${borderClass} flex items-center justify-center relative overflow-hidden group-hover:scale-110 transition-transform ${canToggleWebcam ? 'cursor-pointer' : 'cursor-default'}`}
         onClick={canToggleWebcam ? onToggleWebcam : undefined}
         disabled={!canToggleWebcam}
         title={canToggleWebcam ? 'Toggle webcam' : undefined}
       >
-        <div className={`absolute inset-0 bg-gradient-to-tr ${isEmptySeat ? 'from-[#172033]/55 to-transparent' : 'from-[#172235]/54 to-transparent'}`} />
+        <div className={`absolute inset-0 ${isEmptySeat ? 'bg-gradient-to-tr from-slate-800/55 to-transparent' : 'bg-[radial-gradient(circle_at_30%_20%,rgba(255,107,134,0.88),transparent_38%),linear-gradient(135deg,#8a122b,#090506)]'}`} />
         {hasVideo ? (
           <video
             ref={videoRef}

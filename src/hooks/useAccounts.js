@@ -459,7 +459,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
         ? {
           ...current,
           title: 'Account Created',
-          description: 'Your account is unverified. Send an email to imperfect-protocol@protonmail.com to complete verification.',
+          description: 'Your account is unverified. Send an email to verify@contact.imperfectprotocol.ie to complete verification.',
           isComplete: true,
         }
         : current);
