@@ -17,10 +17,6 @@ export default function LobbyClient({ id }) {
               {lobbyInfo.name}
             </h1>
           </div>
-
-          <div className="hidden md:block text-right">
-            <p className="text-teal-400 text-xs font-mono">Total Tables: {tables.length}</p>
-          </div>
         </div>
 
         {isLoading ? (

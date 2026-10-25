@@ -66,6 +66,13 @@ select {
     linear-gradient(135deg, #090506 0%, #16090b 52%, #270b12 100%);
 }
 
+/* Site backdrop (SiteLayout, navbar included): bg.jpg under a dark crimson wash so content stays readable. */
+@utility bg-lobby {
+  background:
+    linear-gradient(180deg, rgba(9, 5, 6, 0.55), rgba(9, 5, 6, 0.85)),
+    url("/bg.jpg") center / cover no-repeat fixed;
+}
+
 :root {
   background-color: var(--color-slate-950);
   color: var(--color-slate-100);
