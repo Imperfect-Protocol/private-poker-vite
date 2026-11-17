@@ -36,6 +36,10 @@ const RTC_LINK = {
   OUTBOUND: 'outbound',
 };
 
+// An inbound link only receives. Its offer must still carry these m-lines, or the
+// outbound peer answering it has nowhere to attach the media it is meant to send.
+const RECEIVABLE_MEDIA_KINDS = ['audio', 'video'];
+
 const oppositeLink = (direction) => (
   direction === RTC_LINK.OUTBOUND ? RTC_LINK.INBOUND : RTC_LINK.OUTBOUND
 );
@@ -645,10 +649,14 @@ export class PokerRtcSession {
   async renegotiate(peerAddress, direction) {
     const subscription = this.getSubscription(peerAddress, direction);
     const pc = subscription?.peerConnection;
-    if (!pc || pc.signalingState !== 'stable' || isDeadPeerConnection(pc)) return;
+    if (!pc || pc.signalingState !== 'stable' || isDeadPeerConnection(pc)) {
+      if (subscription) subscription.mediaPending = true;
+      return;
+    }
 
     try {
       if (subscription.webRtcChannel?.readyState !== 'open') {
+        subscription.mediaPending = true;
         this.emitMediaDataChannelRequired(peerAddress);
         return;
       }
@@ -663,9 +671,11 @@ export class PokerRtcSession {
       };
 
       if (!this.sendControlMessage(peerAddress, direction, { signal })) {
+        subscription.mediaPending = true;
         this.emitMediaDataChannelRequired(peerAddress);
         return;
       }
+      subscription.mediaPending = false;
       this.logActivity(`media offer sent over data channel ${formatPeer(peerAddress)}`);
     } catch (error) {
       this.logActivity(`renegotiation failed ${formatPeer(peerAddress)}: ${error.message}`);
@@ -1156,6 +1166,9 @@ export class PokerRtcSession {
         channel: dataChannel,
       });
       this.markLinkConnected(peerAddress, direction, resolveConnection);
+      if (this.getSubscription(peerAddress, direction)?.mediaPending) {
+        void this.renegotiate(peerAddress, direction);
+      }
     };
 
     dataChannel.onclose = () => {
@@ -1233,6 +1246,11 @@ export class PokerRtcSession {
         this.resetPeerLink(peerAddress, direction, reason);
       }
     };
+    pc.onsignalingstatechange = () => {
+      if (pc.signalingState === 'stable' && subscription?.mediaPending) {
+        void this.renegotiate(peerAddress, direction);
+      }
+    };
     pc.ondatachannel = (event) => {
       this.logActivity(`data channel received ${formatPeer(peerAddress)} ${direction} (${event.channel.label})`);
       this.setupDataChannel(peerAddress, direction, event.channel, resolveConnection);
@@ -1249,9 +1267,19 @@ export class PokerRtcSession {
 
     if (subscription) {
       subscription.peerConnection = pc;
-      this.syncSubscriptionMedia(subscription);
+      if (subscription.direction === RTC_LINK.OUTBOUND) {
+        this.syncSubscriptionMedia(subscription);
+      } else if (createChannel) {
+        this.requestInboundMedia(pc);
+      }
     }
     return pc;
+  }
+
+  requestInboundMedia(peerConnection) {
+    RECEIVABLE_MEDIA_KINDS.forEach((kind) => {
+      peerConnection.addTransceiver(kind, { direction: 'recvonly' });
+    });
   }
 
   async encryptSignalForPeer(recipientPubKey, signal) {
