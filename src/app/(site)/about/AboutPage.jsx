@@ -14,9 +14,9 @@ import {
 import { Link as RouterLink } from 'react-router-dom';
 import ContactVerifyDialog from '@/components/contact/ContactVerifyDialog';
 
-const LEARN_MORE_URL = 'https://private-poker.wasmer.app';
+const LEARN_MORE_URL = '/our-vision';
 const GET_STARTED_URL = '/get-started';
-const ABOUT_US_URL = 'https://private-poker.wasmer.app/who-are-we';
+const ABOUT_US_URL = '/who-are-we';
 
 const PILLARS = [
   {
@@ -174,10 +174,11 @@ export default function AboutPage() {
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <ExternalLink
                 href={LEARN_MORE_URL}
+                external={false}
                 className="inline-flex items-center gap-2 rounded-lg border border-white/15 px-5 py-3 text-xs font-black uppercase tracking-widest text-slate-200 transition-colors hover:border-teal-400/60 hover:text-white"
               >
                 Learn more about Private Poker
-                <ArrowUpRight size={14} aria-hidden />
+                <ArrowRight size={14} aria-hidden />
               </ExternalLink>
               <ExternalLink
                 href={GET_STARTED_URL}
@@ -253,6 +254,7 @@ export default function AboutPage() {
             title="Built by Imperfect Protocol"
             copy="A small, protocol-obsessed team building the table we wanted to play at: private by default and verifiable by design."
             href={ABOUT_US_URL}
+            external={false}
             cta="Meet the builders"
           />
         </section>

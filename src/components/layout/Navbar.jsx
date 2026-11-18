@@ -25,8 +25,13 @@ export default function Navbar() {
         </Link>
 
         <div className="hidden lg:flex gap-8 text-[0.8em] font-bold uppercase tracking-[0.2em] text-slate-200">
-          {hasCurrentWalletKeypair && (
+          {hasCurrentWalletKeypair ? (
             <Link href="/main-lobby" className="hover:text-cyan-200 transition-colors">Lobbies</Link>
+          ) : (
+            <>
+              <Link href="/our-vision" className="hover:text-cyan-200 transition-colors">Our Vision</Link>
+              <Link href="/who-are-we" className="hover:text-cyan-200 transition-colors">Who Are We</Link>
+            </>
           )}
         </div>
 

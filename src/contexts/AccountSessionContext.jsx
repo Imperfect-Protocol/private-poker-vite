@@ -145,9 +145,15 @@ export function AccountSessionProvider({ children }) {
     throw new Error('Sign in to PrivatePoker before entering a table.');
   }, [accountSession, requestSessionFromTabs]);
 
+  const clearSession = useCallback(() => {
+    accountSessionRef.current = null;
+    setAccountSession(null);
+  }, []);
+
   return (
     <AccountSessionContext.Provider value={{
       accountSession,
+      clearSession,
       isSigningIn: isPending,
       isRestoringSession,
       isWalletConnected: isConnected,

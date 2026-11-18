@@ -10,7 +10,9 @@ import LeaderboardPage from '@/app/(site)/leaderboard/LeaderboardPage';
 import LobbyClient from '@/components/lobby/LobbyClient';
 import MainLobbyPage from '@/app/(site)/main-lobby/MainLobbyPage';
 import MembersOnlyGate from '@/components/members_only/MembersOnlyGate';
+import OurVisionPage from '@/app/(site)/our-vision/OurVisionPage';
 import TableClient from '@/components/table/TableClient';
+import WhoAreWePage from '@/app/(site)/who-are-we/WhoAreWePage';
 
 function LobbyRoute() {
   const { id } = useParams();
@@ -57,6 +59,8 @@ export default function App() {
             <Route path="/main-lobby" element={<MembersOnlyRoute><MainLobbyPage /></MembersOnlyRoute>} />
             <Route path="/get-started" element={<GetStartedPage />} />
             <Route path="/faucet" element={<FaucetPage />} />
+            <Route path="/our-vision" element={<OurVisionPage />} />
+            <Route path="/who-are-we" element={<WhoAreWePage />} />
             <Route path="/about" element={<Navigate to="/" replace />} />
             <Route path="/leaderboard" element={<LeaderboardPage />} />
             <Route path="/lobby/:id" element={<MembersOnlyRoute><LobbyRoute /></MembersOnlyRoute>} />
