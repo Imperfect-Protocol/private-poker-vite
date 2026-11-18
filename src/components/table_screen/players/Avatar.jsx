@@ -44,7 +44,7 @@ export default function Avatar({
       track.readyState !== 'ended'
     )) ?? [];
     videoRef.current.srcObject = videoTracks.length > 0 ? new MediaStream(videoTracks) : null;
-  }, [webcamStream]);
+  }, [hasVideo, webcamStream]);
 
   useEffect(() => {
     if (!audioRef.current) return;
