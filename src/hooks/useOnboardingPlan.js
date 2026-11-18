@@ -36,6 +36,7 @@ export function useOnboardingPlan() {
     && !isCheckingAccount
     && memberAccess.accountStatus !== NO_ACCOUNT;
   const isVerified = isConnected && !isCheckingAccount && memberAccess.isAccountVerified;
+  const isSignedIn = isConnected && memberAccess.hasCurrentWalletKeypair;
 
   const plan = buildOnboardingPlan({
     hasWallet,
@@ -58,6 +59,7 @@ export function useOnboardingPlan() {
     isConnected,
     onArbitrum,
     isCheckingAccount,
+    isSignedIn,
     balances,
     openWallet,
     openNetworks,

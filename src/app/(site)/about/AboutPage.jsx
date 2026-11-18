@@ -146,7 +146,11 @@ export default function AboutPage() {
           />
 
           <div className="relative max-w-2xl">
-            <Eyebrow>About Private Poker</Eyebrow>
+            <p className="font-mono text-[10px] font-bold tracking-[0.32em] text-teal-400">
+              <span className="uppercase">Private Poker</span>{' '}
+              <span className="normal-case tracking-[0.16em] text-slate-500">by</span>{' '}
+              Imperfect Protocol
+            </p>
 
             <h1 className="mt-6 text-4xl font-black uppercase leading-[0.95] tracking-tighter text-white md:text-6xl">
               Poker without

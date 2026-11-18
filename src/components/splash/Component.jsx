@@ -1,19 +1,17 @@
 "use client";
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import AccessRestricted from '@/components/age_gate/AccessRestricted';
 import AgeGateDialog from '@/components/age_gate/AgeGateDialog';
 import DemoDisclaimer from '@/components/demo_disclaimer/DemoDisclaimer';
 
-export default function Splash() {
+export default function Splash({ onAdultConfirmed }) {
   const [showDisclaimer, setShowDisclaimer] = useState(false);
   const [fadeLogo, setFadeLogo] = useState(false);
   const [showAgeGate, setShowAgeGate] = useState(false);
   const [fadeAgeGate, setFadeAgeGate] = useState(false);
   const [fadeDisclaimer, setFadeDisclaimer] = useState(false);
   const [isRestricted, setIsRestricted] = useState(false);
-  const router = useRouter();
 
   useEffect(() => {
     const disclaimerTimer = setTimeout(() => setShowDisclaimer(true), 900);
@@ -30,7 +28,7 @@ export default function Splash() {
   function handleAdultConfirmed() {
     setFadeAgeGate(true);
     setFadeDisclaimer(true);
-    setTimeout(() => router.push('/signin'), 800);
+    setTimeout(() => onAdultConfirmed?.(), 800);
   }
 
   function handleUnderage() {

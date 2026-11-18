@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Routes, Route, Outlet, useParams, useSearchParams } from 'react-router-dom';
 import AccountSignin from '@/components/account_signin/Component';
+import AgeGate from '@/components/age_gate/AgeGate';
 import SiteLayout from '@/components/layout/SiteLayout';
 import AboutPage from '@/app/(site)/about/AboutPage';
 import FaucetPage from '@/app/(site)/faucet/FaucetPage';
@@ -9,7 +10,6 @@ import LeaderboardPage from '@/app/(site)/leaderboard/LeaderboardPage';
 import LobbyClient from '@/components/lobby/LobbyClient';
 import MainLobbyPage from '@/app/(site)/main-lobby/MainLobbyPage';
 import MembersOnlyGate from '@/components/members_only/MembersOnlyGate';
-import SplashPage from '@/app/SplashPage';
 import TableClient from '@/components/table/TableClient';
 
 function LobbyRoute() {
@@ -49,21 +49,23 @@ function MembersOnlyRoute({ children }) {
 export default function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<SplashPage />} />
-        <Route element={<SiteRouteLayout />}>
-          <Route path="/signin" element={<AccountSignin />} />
-          <Route path="/main-lobby" element={<MembersOnlyRoute><MainLobbyPage /></MembersOnlyRoute>} />
-          <Route path="/get-started" element={<GetStartedPage />} />
-          <Route path="/faucet" element={<FaucetPage />} />
-          <Route path="/about" element={<AboutPage />} />
-          <Route path="/leaderboard" element={<LeaderboardPage />} />
-          <Route path="/lobby/:id" element={<MembersOnlyRoute><LobbyRoute /></MembersOnlyRoute>} />
-        </Route>
-        <Route path="/tables/:id" element={<MembersOnlyRoute><TableRoute /></MembersOnlyRoute>} />
-        <Route path="/tables/create" element={<MembersOnlyRoute><CreateTablePage /></MembersOnlyRoute>} />
-        <Route path="*" element={<Navigate to="/signin" replace />} />
-      </Routes>
+      <AgeGate>
+        <Routes>
+          <Route element={<SiteRouteLayout />}>
+            <Route index element={<AboutPage />} />
+            <Route path="/signin" element={<AccountSignin />} />
+            <Route path="/main-lobby" element={<MembersOnlyRoute><MainLobbyPage /></MembersOnlyRoute>} />
+            <Route path="/get-started" element={<GetStartedPage />} />
+            <Route path="/faucet" element={<FaucetPage />} />
+            <Route path="/about" element={<Navigate to="/" replace />} />
+            <Route path="/leaderboard" element={<LeaderboardPage />} />
+            <Route path="/lobby/:id" element={<MembersOnlyRoute><LobbyRoute /></MembersOnlyRoute>} />
+          </Route>
+          <Route path="/tables/:id" element={<MembersOnlyRoute><TableRoute /></MembersOnlyRoute>} />
+          <Route path="/tables/create" element={<MembersOnlyRoute><CreateTablePage /></MembersOnlyRoute>} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </AgeGate>
     </BrowserRouter>
   );
 }

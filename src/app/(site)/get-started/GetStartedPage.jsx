@@ -526,13 +526,15 @@ export default function GetStartedPage() {
             {accountKnown && plan.isVerified && (
               <JoinCard
                 icon={<Spade size={16} strokeWidth={2} aria-hidden />}
-                title="Join a game"
+                title={onboarding.isSignedIn ? 'Join a game' : 'Sign in'}
                 done
-                copy="Your account is verified. Pick a lobby and take a seat."
+                copy={onboarding.isSignedIn
+                  ? 'Your account is verified. Pick a lobby and take a seat.'
+                  : 'Your account is verified. Sign in with your wallet to take a seat.'}
               >
-                <RouterLink to="/main-lobby">
+                <RouterLink to={onboarding.isSignedIn ? '/main-lobby' : '/signin'}>
                   <JoinCardAction>
-                    Find a table
+                    {onboarding.isSignedIn ? 'Find a table' : 'Sign in'}
                     <ArrowRight size={12} aria-hidden />
                   </JoinCardAction>
                 </RouterLink>

@@ -1,7 +1,11 @@
-import WalletAuth from '@/components/wallet/WalletAuth'
+import NavAccountButton from '@/components/wallet/NavAccountButton'
+import NavWalletStats from '@/components/wallet/NavWalletStats'
+import { useMemberAccess } from '@/hooks/useMemberAccess'
 import Link from 'next/link'
 
 export default function Navbar() {
+  const { hasCurrentWalletKeypair } = useMemberAccess()
+
   return (
     <nav className="h-[var(--navbar-height)] shrink-0 flex justify-between items-center px-6 py-2 border-b border-slate-800">
       <div className="flex items-center gap-12">
@@ -21,14 +25,17 @@ export default function Navbar() {
         </Link>
 
         <div className="hidden lg:flex gap-8 text-[0.8em] font-bold uppercase tracking-[0.2em] text-slate-200">
-          <Link href="/main-lobby" className="hover:text-cyan-200 transition-colors">Lobbies</Link>
-          <Link href="/leaderboard" className="hover:text-cyan-200 transition-colors">Rankings</Link>
-          <Link href="/about" className="hover:text-cyan-200 transition-colors">About</Link>
+          {hasCurrentWalletKeypair && (
+            <Link href="/main-lobby" className="hover:text-cyan-200 transition-colors">Lobbies</Link>
+          )}
         </div>
 
       </div>
 
-      <WalletAuth />
+      <div className="flex items-center gap-3">
+        <NavWalletStats />
+        <NavAccountButton />
+      </div>
     </nav>
   )
 }
