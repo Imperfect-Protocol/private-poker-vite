@@ -11,7 +11,9 @@ import LobbyClient from '@/components/lobby/LobbyClient';
 import MainLobbyPage from '@/app/(site)/main-lobby/MainLobbyPage';
 import MembersOnlyGate from '@/components/members_only/MembersOnlyGate';
 import OurVisionPage from '@/app/(site)/our-vision/OurVisionPage';
+import PrivacyPage from '@/app/(site)/privacy/PrivacyPage';
 import TableClient from '@/components/table/TableClient';
+import TermsPage from '@/app/(site)/terms/TermsPage';
 import WhoAreWePage from '@/app/(site)/who-are-we/WhoAreWePage';
 
 function LobbyRoute() {
@@ -61,6 +63,8 @@ export default function App() {
             <Route path="/faucet" element={<FaucetPage />} />
             <Route path="/our-vision" element={<OurVisionPage />} />
             <Route path="/who-are-we" element={<WhoAreWePage />} />
+            <Route path="/terms" element={<TermsPage />} />
+            <Route path="/privacy" element={<PrivacyPage />} />
             <Route path="/about" element={<Navigate to="/" replace />} />
             <Route path="/leaderboard" element={<LeaderboardPage />} />
             <Route path="/lobby/:id" element={<MembersOnlyRoute><LobbyRoute /></MembersOnlyRoute>} />
