@@ -1,34 +1,90 @@
 "use client";
 
 import { useEffect, useRef, useState } from 'react';
-import { MousePointerClick } from 'lucide-react';
+import { MousePointerClick, Spade } from 'lucide-react';
 import FlowStepDialog from '@/components/table_screen/dialogs/FlowStepDialog';
 
 const POKE_SEARCH_MS = 10000;
 
-const peerConnectionStatus = (state) => {
+const StepTone = Object.freeze({
+  WAITING: 'waiting',
+  PENDING: 'pending',
+  SUCCESS: 'success',
+  FAILED: 'failed',
+});
+
+const securityTone = (status) => {
+  if (status === 'active') return StepTone.SUCCESS;
+  if (status === 'error') return StepTone.FAILED;
+  if (status === 'verifying') return StepTone.PENDING;
+  return StepTone.WAITING;
+};
+
+const lobbyTone = (state) => {
+  if (state === 'Connected') return StepTone.SUCCESS;
+  if (state === 'Failed') return StepTone.FAILED;
+  if (state === 'Searching') return StepTone.PENDING;
+  return StepTone.WAITING;
+};
+
+const isConnectionFailure = (state) => (
+  state === 'PeerRejected'
+  || state === 'OfferTimeout'
+  || state === 'ConnectionTimeout'
+  || state === 'Disconnected'
+  || state === 'Failed'
+);
+
+const connectionTone = (state) => {
+  if (state === 'Connected') return StepTone.SUCCESS;
+  if (isConnectionFailure(state)) return StepTone.FAILED;
+  if (
+    state === 'PeerWaiting'
+    || state === 'Created'
+    || state === 'OfferSent'
+    || state === 'AcceptSent'
+    || state === 'AcceptReceived'
+  ) return StepTone.PENDING;
+  return StepTone.WAITING;
+};
+
+const lobbyStatusText = (state) => {
+  if (state === 'Connected') return 'connected';
+  if (state === 'Failed') return 'failed';
+  if (state === 'Searching') return 'searching';
+  return '';
+};
+
+const inboundStatusText = (state) => {
   if (state === 'Connected') return 'connected';
   if (state === 'PeerWaiting') return 'peer found, waiting';
   if (state === 'PeerRejected') return 'rejected';
-  if (state === 'Disconnected' || state === 'OfferTimeout') return 'not connected';
-  if (state === 'AcceptSent' || state === 'AcceptReceived') return 'Connecting';
-  if (state === 'OfferSent' || state === 'Created') return 'Searching';
-  return 'Searching';
+  if (state === 'Disconnected' || state === 'OfferTimeout' || state === 'ConnectionTimeout') return 'not connected';
+  if (state === 'AcceptSent' || state === 'AcceptReceived') return 'connecting';
+  if (state === 'OfferSent' || state === 'Created') return 'searching';
+  return '';
 };
 
-const subscriptionStatus = (state) => {
-  if (state === 'Connected') return 'peer subscribed';
+const outboundStatusText = (state) => {
+  if (state === 'Connected') return 'connected';
   if (state === 'PeerWaiting') return 'peer waiting';
-  if (state === 'PeerRejected') return 'no subscribers';
-  if (state === 'Disconnected' || state === 'OfferTimeout') return 'no subscribers';
-  if (state === 'OfferSent' || state === 'AcceptSent' || state === 'AcceptReceived' || state === 'Created') return 'listening';
-  return 'listening';
+  if (state === 'PeerRejected' || state === 'Disconnected' || state === 'OfferTimeout' || state === 'ConnectionTimeout') return 'not connected';
+  if (state === 'OfferSent' || state === 'AcceptSent' || state === 'AcceptReceived' || state === 'Created') return 'pending';
+  return '';
 };
 
-const isRtcConnectingState = (state) => (
-  state === 'AcceptSent'
-  || state === 'AcceptReceived'
-);
+function RetryAction({ icon, label, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex cursor-pointer items-center gap-1.5 rounded border border-yellow-300/70 bg-yellow-400/15 px-2 py-1 text-[10px] font-black uppercase tracking-widest text-yellow-100 shadow-[0_0_16px_rgba(250,204,21,0.22)] transition-colors hover:border-yellow-200 hover:bg-yellow-300/25 hover:text-white"
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
 
 export default function ReJoinTableFlowDialog({
   table,
@@ -43,13 +99,11 @@ export default function ReJoinTableFlowDialog({
   const [signatureStatus, setSignatureStatus] = useState('unverified');
   const [error, setError] = useState('');
   const [isSearchCycleActive, setIsSearchCycleActive] = useState(true);
-  const [hasRtcConnecting, setHasRtcConnecting] = useState(false);
 
   const startSearchCycle = () => {
     if (pokeSearchTimerRef.current) {
       clearTimeout(pokeSearchTimerRef.current);
     }
-    setHasRtcConnecting(false);
     setIsSearchCycleActive(true);
     pokeSearchTimerRef.current = setTimeout(() => {
       pokeSearchTimerRef.current = null;
@@ -86,41 +140,44 @@ export default function ReJoinTableFlowDialog({
     };
   }, []);
 
-  const inboundStatus = peerConnectionStatus(networkSnapshot?.inboundState);
-  const outboundStatus = subscriptionStatus(networkSnapshot?.outboundState);
-  const isInboundConnected = networkSnapshot?.inboundState === 'Connected';
-  const isPeerWaiting = networkSnapshot?.inboundState === 'PeerWaiting';
-  const isPeerRejected = networkSnapshot?.inboundState === 'PeerRejected';
-  const isRtcConnecting = isRtcConnectingState(networkSnapshot?.inboundState);
-  const canPokeInbound = signatureStatus === 'active'
+  const lobbyState = networkSnapshot?.lobbyState ?? 'Waiting';
+  const inboundState = networkSnapshot?.inboundState ?? 'None';
+  const outboundState = networkSnapshot?.outboundState ?? 'None';
+  const isLobbyConnected = lobbyState === 'Connected';
+  const isLobbyFailed = lobbyState === 'Failed';
+  const isInboundConnected = inboundState === 'Connected';
+  const isOutboundConnected = outboundState === 'Connected';
+  const isPeerWaiting = inboundState === 'PeerWaiting';
+  const isPeerRejected = inboundState === 'PeerRejected';
+  const canPokeNetwork = signatureStatus === 'active' && isLobbyFailed && !isInboundConnected;
+  const canPokeEvents = signatureStatus === 'active'
+    && isLobbyConnected
     && !isInboundConnected
     && !isPeerWaiting
     && !isPeerRejected
-    && !isSearchCycleActive;
-  const shownInboundStatus = isInboundConnected
-    ? 'connected'
-    : isRtcConnecting || hasRtcConnecting
-      ? 'Connecting'
-      : isPeerWaiting
-        ? inboundStatus
-      : isPeerRejected
-        ? inboundStatus
-      : isSearchCycleActive
-        ? 'Searching'
-        : inboundStatus;
+    && (isConnectionFailure(inboundState) || !isSearchCycleActive);
+  const eventsTone = isLobbyConnected ? connectionTone(inboundState) : StepTone.WAITING;
+  const eventsStatus = isLobbyConnected ? inboundStatusText(inboundState) : '';
+  const actionsTone = isLobbyConnected ? connectionTone(outboundState) : StepTone.WAITING;
+  const actionsStatus = isLobbyConnected ? outboundStatusText(outboundState) : '';
   const isComplete = signatureStatus === 'active'
-    && inboundStatus === 'connected'
-    && outboundStatus === 'peer subscribed';
+    && isLobbyConnected
+    && isInboundConnected
+    && isOutboundConnected;
   const title = isPeerRejected
     ? 'Peer Rejected'
     : isPeerWaiting
       ? 'Peer Notified'
-      : 'Joining P2P Network';
+      : isLobbyFailed
+        ? 'Lobby Offline'
+        : 'Joining P2P Network';
   const description = isPeerRejected
     ? 'The other player rejected your offer.'
     : isPeerWaiting
       ? 'The other peer was notified. Waiting for them to accept.'
-      : 'We will restore your table session and connect the inbound and outbound poker channels. The table stays locked until peers are connected.';
+      : isLobbyFailed
+        ? 'The Lobby tab did not answer. Keep the Lobby tab open and Poke to retry the background connection.'
+        : 'We will restore your table session, connect through the Lobby, and open the inbound and outbound poker channels. The table stays locked until every channel is ready.';
 
   useEffect(() => {
     if (!isInboundConnected && !isPeerWaiting && !isPeerRejected) return;
@@ -128,19 +185,30 @@ export default function ReJoinTableFlowDialog({
       clearTimeout(pokeSearchTimerRef.current);
       pokeSearchTimerRef.current = null;
     }
-    setHasRtcConnecting(false);
     setIsSearchCycleActive(false);
   }, [isInboundConnected, isPeerRejected, isPeerWaiting]);
-
-  useEffect(() => {
-    if (isRtcConnecting) setHasRtcConnecting(true);
-  }, [isRtcConnecting]);
 
   useEffect(() => {
     if (!isComplete || readyRef.current) return;
     readyRef.current = true;
     onReady?.();
   }, [isComplete, onReady]);
+
+  const retryConnection = async () => {
+    setError('');
+    startSearchCycle();
+    try {
+      await table.retryInboundConnection?.();
+    } catch (err) {
+      console.error(err);
+      if (pokeSearchTimerRef.current) {
+        clearTimeout(pokeSearchTimerRef.current);
+        pokeSearchTimerRef.current = null;
+      }
+      setIsSearchCycleActive(false);
+      setError(err.shortMessage || err.details || err.message || 'Connection retry failed.');
+    }
+  };
 
   return (
     <FlowStepDialog
@@ -154,42 +222,43 @@ export default function ReJoinTableFlowDialog({
       onOk={onRejectedClose}
       steps={[
         {
-          id: 'signature',
+          id: 'security',
           label: 'Security',
           status: signatureStatus,
-          statusTone: signatureStatus === 'active' ? 'complete' : undefined,
+          tone: securityTone(signatureStatus),
         },
         {
-          id: 'inbound',
-          label: 'Peer Connection',
-          status: canPokeInbound ? '' : shownInboundStatus,
-          statusTone: ['Searching', 'Connecting'].includes(shownInboundStatus) ? 'connecting' : undefined,
-          action: canPokeInbound ? (
-            <button
-              type="button"
-              onClick={async () => {
-                setError('');
-                startSearchCycle();
-                try {
-                  await table.retryInboundConnection?.();
-                } catch (err) {
-                  console.error(err);
-                  if (pokeSearchTimerRef.current) {
-                    clearTimeout(pokeSearchTimerRef.current);
-                    pokeSearchTimerRef.current = null;
-                  }
-                  setIsSearchCycleActive(false);
-                  setError(err.shortMessage || err.details || err.message || 'Poke failed.');
-                }
-              }}
-              className="inline-flex cursor-pointer items-center gap-1.5 rounded border border-yellow-300/70 bg-yellow-400/15 px-2 py-1 text-[10px] font-black uppercase tracking-widest text-yellow-100 shadow-[0_0_16px_rgba(250,204,21,0.22)] transition-colors hover:border-yellow-200 hover:bg-yellow-300/25 hover:text-white"
-            >
-              <MousePointerClick size={12} strokeWidth={3} />
-              Poke
-            </button>
+          id: 'network',
+          label: 'Network',
+          status: lobbyStatusText(lobbyState),
+          tone: lobbyTone(lobbyState),
+          action: canPokeNetwork ? (
+            <RetryAction
+              icon={<MousePointerClick size={12} strokeWidth={3} />}
+              label="Poke"
+              onClick={retryConnection}
+            />
           ) : null,
         },
-        { id: 'outbound', label: 'Subscriptions', status: outboundStatus },
+        {
+          id: 'events',
+          label: 'Events',
+          status: eventsStatus,
+          tone: eventsTone,
+          action: canPokeEvents ? (
+            <RetryAction
+              icon={<Spade size={12} strokeWidth={3} />}
+              label="Poke"
+              onClick={retryConnection}
+            />
+          ) : null,
+        },
+        {
+          id: 'actions',
+          label: 'Actions',
+          status: actionsStatus,
+          tone: actionsTone,
+        },
       ]}
     />
   );

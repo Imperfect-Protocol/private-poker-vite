@@ -283,7 +283,8 @@ export default function TableClient({ tableId, lobbyId, peerId, initialTableData
   const debugMessages = useMemo(() => (
     DebugMessageList.merge(messages, pokerTableState.gameMessages)
   ), [messages, pokerTableState.gameMessages]);
-  const p2pEstablished = table.networkSnapshot?.status === 'connected';
+  const p2pEstablished = table.networkSnapshot?.status === 'connected'
+    && table.networkSnapshot?.outboundState === 'Connected';
   const peerDecisionState = table.networkSnapshot?.inboundState;
   const showPeerWaitStatusDialog = (
     table.hasJoinedTable

@@ -180,6 +180,7 @@ export class PokerRtcSession {
     this.duplicateNextMessage = false;
     this.ready = false;
     this.hasConnectionError = false;
+    this.lobbyState = 'Waiting';
     this.snapshotKey = '';
     this.localMediaStream = null;
     this.remoteMediaStreams = {};
@@ -265,6 +266,7 @@ export class PokerRtcSession {
     this.network?.close();
     this.networkKey = networkKey;
     this.network = null;
+    this.lobbyState = 'Waiting';
     if (!this.config.playerAddress || !this.config.privateKey || !this.config.peerId || !this.config.lobbyId || !this.config.tableId) {
       if (!this.hasLoggedMissingPeerId && !this.config.peerId) {
         this.hasLoggedMissingPeerId = true;
@@ -306,12 +308,16 @@ export class PokerRtcSession {
     });
 
     const state = this.subscription?.state ?? 'None';
+    const outboundState = this.network?.isOutboundConnected?.()
+      ? SUBSCRIPTION_STATE.CONNECTED
+      : state;
     return {
       connectedPeerAddresses: Array.from(this.connectedPeers),
       connectedPeerCount: this.connectedPeers.size,
       expectedPeerCount: this.subscription ? 1 : 0,
-      inboundState: this.connectedPeers.size > 0 ? SUBSCRIPTION_STATE.CONNECTED : state,
-      outboundState: this.connectedPeers.size > 0 ? SUBSCRIPTION_STATE.CONNECTED : state,
+      lobbyState: this.lobbyState,
+      inboundState: state,
+      outboundState,
       inboundPeerAddress: this.subscription?.playerAddress ?? null,
       outboundPeerAddress: this.subscription?.playerAddress ?? null,
       peerStates,
@@ -326,7 +332,7 @@ export class PokerRtcSession {
     if (!this.config.playerAddress || !this.config.operatorPrivateKey || !this.config.privateKey || !this.config.publicKey) return 'waiting';
     if (!this.config.isTableFull) return 'waiting';
     if (!this.subscription) return 'waiting';
-    return this.connectedPeers.size > 0 ? 'connected' : 'connecting';
+    return this.subscription.state === SUBSCRIPTION_STATE.CONNECTED ? 'connected' : 'connecting';
   }
 
   emitState() {
@@ -335,6 +341,7 @@ export class PokerRtcSession {
       snapshot.status,
       snapshot.connectedPeerCount,
       snapshot.expectedPeerCount,
+      snapshot.lobbyState,
       snapshot.inboundState,
       snapshot.outboundState,
       snapshot.connectedPeerAddresses.join('|'),
@@ -402,6 +409,8 @@ export class PokerRtcSession {
     if (!peerKey || !network) return;
     this.subscription = new PokerPeerSubscription(peerPlayerAddress, peerAnnouncePubKey, callback);
     this.connectedPeers.delete(peerKey);
+    this.lobbyState = 'Searching';
+    this.hasConnectionError = false;
     callback?.(this.getPlayerSeatNo(peerPlayerAddress), {
       kind: 'network',
       state: SUBSCRIPTION_STATE.CREATED,
@@ -425,6 +434,10 @@ export class PokerRtcSession {
     if (VirtualNetworkActivityVisibility.shouldDisplay(event)) {
       this.emitActivity(activityText, event);
     }
+    if (event.type === 'ConnectionStep') {
+      this.handleConnectionStep(event);
+      return;
+    }
     if (event.type === 'PeerConnected') {
       this.handlePeerConnected(event);
       return;
@@ -446,6 +459,7 @@ export class PokerRtcSession {
       return;
     }
     if (event.type === 'ConnectionFailed') {
+      if (this.lobbyState !== 'Connected') this.lobbyState = 'Failed';
       this.hasConnectionError = true;
       this.emitState();
       return;
@@ -457,6 +471,13 @@ export class PokerRtcSession {
     if (event.type === 'MediaStream') {
       this.handleRemoteMediaStream(event);
     }
+  }
+
+  handleConnectionStep(event) {
+    if (event.step !== 'RouteAvailable') return;
+    this.lobbyState = 'Connected';
+    this.hasConnectionError = false;
+    this.emitState();
   }
 
   handleRemoteMediaStream(event) {
@@ -487,6 +508,7 @@ export class PokerRtcSession {
         playerAddress: this.subscription.playerAddress,
       });
     }
+    this.lobbyState = 'Connected';
     this.hasConnectionError = false;
     this.emitActivity(`${formatSeat(event.peerAddress)} => Connected ${formatKey(this.getPlayerPublicKey(event.peerAddress))}`);
     if (!this.ready && this.getStatus() === 'connected') this.emitActivity('[Me]: Ready');
@@ -549,6 +571,7 @@ export class PokerRtcSession {
         playerAddress: this.subscription.playerAddress,
       });
     }
+    if (this.lobbyState !== 'Connected') this.lobbyState = 'Failed';
     this.emitState();
   }
 
@@ -735,6 +758,7 @@ export class PokerRtcSession {
     this.seenDisagreements.clear();
     this.ready = false;
     this.hasConnectionError = false;
+    this.lobbyState = 'Waiting';
     this.localMediaStream = null;
     this.remoteMediaStreams = {};
     this.snapshotKey = '';
