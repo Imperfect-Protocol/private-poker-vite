@@ -1,15 +1,17 @@
 import { useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import Splash from '@/components/splash/Component';
 
 /**
- * Splash and age check that stand between the visitor and every route. Each
- * page load starts at the splash; confirming the age check reveals the app until
- * the next full reload.
+ * Splash and age check for the landing page only. Table and lobby routes are
+ * entered directly (including from their own tabs) without interrupting play.
+ * Confirming once keeps the landing page open for the rest of the session.
  */
 export default function AgeGate({ children }) {
+  const location = useLocation();
   const [isConfirmed, setIsConfirmed] = useState(false);
 
-  if (isConfirmed) return children;
+  if (location.pathname !== '/' || isConfirmed) return children;
 
   return <Splash onAdultConfirmed={() => setIsConfirmed(true)} />;
 }
