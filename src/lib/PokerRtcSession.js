@@ -1,10 +1,7 @@
 import { hexToBytes, toHex } from 'viem';
 import {
-  RouteBus,
-  RouteStore,
-  VirtualNetwork,
+  TableP2PSession,
   VirtualNetworkActivityBus,
-  VirtualNetworkConsoleLogger,
   VirtualNetworkLogFormatter,
 } from 'privatepoker-p2p';
 import {
@@ -13,7 +10,7 @@ import {
   sign as blsSign,
   verify as blsVerify,
 } from '@/lib/crum_bls';
-import { MESH_ENDPOINTS, MESH_ICE_SERVERS } from '@/lib/mesh';
+import { MESH_ICE_SERVERS } from '@/lib/mesh';
 
 const SUBSCRIPTION_STATE = {
   CREATED: 'Created',
@@ -24,9 +21,12 @@ const SUBSCRIPTION_STATE = {
   DISCONNECTED: 'Disconnected',
 };
 
-const CONNECTION_TIMEOUT_MS = 10_000;
+const INBOUND_LABEL = 'inbound';
+const OUTBOUND_LABEL = 'outbound';
+const BROADCAST_PREFIX = 'private-poker';
 const TRANSPORT_SIGNATURE_SCHEME = 'BLS12-381-G2-PK-G1-SIG';
 const MAX_PUBLISHED_MESSAGE_CACHE = 200;
+const SESSION_DESCRIPTION_TYPES = new Set(['sdp-offer', 'sdp-answer']);
 const VISIBLE_SIGNAL_STEPS = new Set([
   'AttemptStarted',
   'AnnounceSent',
@@ -34,7 +34,6 @@ const VISIBLE_SIGNAL_STEPS = new Set([
   'OfferRequested',
   'OfferCreating',
   'OfferCreated',
-  'OfferSuppressed',
   'ReplacingConnection',
   'OfferSent',
   'OfferReceived',
@@ -45,7 +44,7 @@ const VISIBLE_SIGNAL_STEPS = new Set([
   'RouteAvailable',
 ]);
 
-const normalizeAddress = (value) => value?.toLowerCase() ?? '';
+const normalizeAddress = (value) => String(value ?? '').toLowerCase();
 const formatSeat = (value) => (value ? value.slice(2, 4).toUpperCase() : '??');
 const formatKey = (value) => {
   if (!value) return 'missing';
@@ -56,8 +55,6 @@ const ensureHexPrefix = (value) => {
   const normalized = String(value ?? '');
   return normalized.startsWith('0x') ? normalized : `0x${normalized}`;
 };
-const meshUrls = () => MESH_ENDPOINTS.map((endpoint) => endpoint?.url).filter(Boolean);
-
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value && typeof value === 'object') {
@@ -123,6 +120,13 @@ function badSignaturePayload(payload) {
   return badPayload;
 }
 
+const transportLogLine = (localAddress, event) => {
+  const text = VirtualNetworkLogFormatter.text(localAddress, event);
+  const messageType = event.messageData?.type;
+  if (!messageType || SESSION_DESCRIPTION_TYPES.has(messageType)) return text;
+  return `${text} (${messageType})`;
+};
+
 class PokerPeerSubscription {
   constructor(peerPlayerAddress, peerAnnouncePubKey, callback) {
     this.playerAddress = peerPlayerAddress;
@@ -150,7 +154,7 @@ class VirtualNetworkActivityVisibility {
   static isSessionDescriptionMessage(event) {
     return (
       (event?.type === 'MessageDelivered' || event?.type === 'MessageReceived')
-      && (event.messageData?.type === 'sdp-offer' || event.messageData?.type === 'sdp-answer')
+      && SESSION_DESCRIPTION_TYPES.has(event.messageData?.type)
     );
   }
 }
@@ -163,8 +167,7 @@ export class PokerRtcSession {
     this.blsActionKey = null;
     this.network = null;
     this.networkKey = '';
-    this.routeBus = new RouteBus({ channelName: 'private-poker:routes' });
-    this.routeStore = new RouteStore({ storageKey: 'private-poker:routes' });
+    this.hasLoggedMissingPeerId = false;
     this.activityBus = new VirtualNetworkActivityBus({ channelName: 'private-poker:debug' });
     this.subscription = null;
     this.connectedPeers = new Set();
@@ -179,10 +182,12 @@ export class PokerRtcSession {
     this.hasConnectionError = false;
     this.snapshotKey = '';
     this.localMediaStream = null;
+    this.remoteMediaStreams = {};
     this.mediaSnapshotVersion = 0;
     this.configKey = '';
     this.config = {
       playerAddress: undefined,
+      peerId: undefined,
       operator: undefined,
       tableId: undefined,
       lobbyId: undefined,
@@ -236,6 +241,7 @@ export class PokerRtcSession {
 
     return [
       normalizeAddress(config.playerAddress),
+      config.peerId ?? '',
       config.tableId ?? '',
       config.lobbyId ?? '',
       config.currentHand ?? '',
@@ -250,36 +256,35 @@ export class PokerRtcSession {
   ensureNetwork() {
     const networkKey = [
       normalizeAddress(this.config.playerAddress),
+      this.config.peerId ?? '',
       this.config.lobbyId ?? '',
       this.config.tableId ?? '',
       this.config.privateKey ? 'private-key-ready' : '',
     ].join(':');
     if (this.network && this.networkKey === networkKey) return this.network;
-    if (this.network) this.network.unsubscribe('inbound');
+    this.network?.close();
     this.networkKey = networkKey;
     this.network = null;
-    if (!this.config.playerAddress || !this.config.privateKey || !this.config.lobbyId || !this.config.tableId) {
+    if (!this.config.playerAddress || !this.config.privateKey || !this.config.peerId || !this.config.lobbyId || !this.config.tableId) {
+      if (!this.hasLoggedMissingPeerId && !this.config.peerId) {
+        this.hasLoggedMissingPeerId = true;
+        this.logActivity('Missing parent Lobby peerId; table P2P is disabled.');
+      }
       return null;
     }
-    this.network = new VirtualNetwork(
-      (event) => this.handleVirtualNetworkEvent(event),
-      this.config.playerAddress,
-      hexToBytes(ensureHexPrefix(this.config.privateKey)),
-      {
-        lobbyId: String(this.config.lobbyId),
-        tableId: String(this.config.tableId),
-        meshUrls: meshUrls(),
-        iceServers: MESH_ICE_SERVERS,
-        broadcastPrefix: 'private-poker',
-        role: 'table',
-        routeOracle: (route) => this.routeStore.hasLivePeerRoute({
-          ownerAddress: this.config.playerAddress,
-          peerAddress: route.peerAddress,
-          lobbyId: route.lobbyId,
-          backgroundTableId: '0',
-        }),
-      },
-    );
+    this.network = new TableP2PSession({
+      handler: (event) => this.handleVirtualNetworkEvent(event),
+      address: this.config.playerAddress,
+      privateKey: hexToBytes(ensureHexPrefix(this.config.privateKey)),
+      peerId: this.config.peerId,
+      lobbyId: String(this.config.lobbyId),
+      tableId: String(this.config.tableId),
+      inboundLabel: INBOUND_LABEL,
+      outboundLabel: OUTBOUND_LABEL,
+      iceServers: MESH_ICE_SERVERS,
+      broadcastPrefix: BROADCAST_PREFIX,
+    });
+    this.network.setLocalStream(this.localMediaStream);
     return this.network;
   }
 
@@ -310,7 +315,7 @@ export class PokerRtcSession {
       inboundPeerAddress: this.subscription?.playerAddress ?? null,
       outboundPeerAddress: this.subscription?.playerAddress ?? null,
       peerStates,
-      remoteMediaStreams: {},
+      remoteMediaStreams: this.remoteMediaStreams,
       mediaSnapshotVersion: this.mediaSnapshotVersion,
       status: this.getStatus(),
     };
@@ -358,7 +363,11 @@ export class PokerRtcSession {
   }
 
   logActivity(text, details = undefined) {
-    VirtualNetworkConsoleLogger.log('poker-session', { text, details });
+    if (details === undefined) {
+      console.log(`[RTC debug] ${text}`);
+      return;
+    }
+    console.log(`[RTC debug] ${text}`, details);
   }
 
   getPlayerPublicKey(peerPlayerAddress) {
@@ -400,10 +409,7 @@ export class PokerRtcSession {
     });
     this.emitState();
     network.subscribe(
-      'inbound',
-      'outbound',
       peerPlayerAddress,
-      CONNECTION_TIMEOUT_MS,
       String(this.config.lobbyId),
       String(this.config.tableId),
     );
@@ -415,7 +421,7 @@ export class PokerRtcSession {
 
   handleVirtualNetworkEvent(event) {
     const activityText = VirtualNetworkLogFormatter.text(this.config.playerAddress, event);
-    this.logActivity(activityText, event);
+    this.logActivity(transportLogLine(this.config.playerAddress, event), event);
     if (VirtualNetworkActivityVisibility.shouldDisplay(event)) {
       this.emitActivity(activityText, event);
     }
@@ -446,7 +452,27 @@ export class PokerRtcSession {
     }
     if (event.type === 'MessageReceived') {
       void this.handleIncomingVirtualMessage(event);
+      return;
     }
+    if (event.type === 'MediaStream') {
+      this.handleRemoteMediaStream(event);
+    }
+  }
+
+  handleRemoteMediaStream(event) {
+    const peerKey = normalizeAddress(event.peerAddress);
+    if (!peerKey) return;
+    this.remoteMediaStreams = { ...this.remoteMediaStreams, [peerKey]: event.stream };
+    this.mediaSnapshotVersion += 1;
+    this.emitState();
+  }
+
+  dropRemoteMediaStream(peerKey) {
+    if (!this.remoteMediaStreams[peerKey]) return;
+    const streams = { ...this.remoteMediaStreams };
+    delete streams[peerKey];
+    this.remoteMediaStreams = streams;
+    this.mediaSnapshotVersion += 1;
   }
 
   handlePeerConnected(event) {
@@ -463,12 +489,6 @@ export class PokerRtcSession {
     }
     this.hasConnectionError = false;
     this.emitActivity(`${formatSeat(event.peerAddress)} => Connected ${formatKey(this.getPlayerPublicKey(event.peerAddress))}`);
-    this.routeBus.publishKeepRoute({
-      ownerAddress: this.config.playerAddress,
-      peerAddress: event.peerAddress,
-      lobbyId: this.config.lobbyId,
-      tableId: this.config.tableId,
-    });
     if (!this.ready && this.getStatus() === 'connected') this.emitActivity('[Me]: Ready');
     this.ready = this.getStatus() === 'connected';
     this.emitState();
@@ -505,6 +525,7 @@ export class PokerRtcSession {
   handlePeerDisconnected(event) {
     const peerKey = normalizeAddress(event.peerAddress);
     this.connectedPeers.delete(peerKey);
+    if (event.subscriptionLabel === INBOUND_LABEL) this.dropRemoteMediaStream(peerKey);
     if (this.subscription && normalizeAddress(this.subscription.playerAddress) === peerKey) {
       this.subscription.state = SUBSCRIPTION_STATE.DISCONNECTED;
       this.subscription.callback?.(this.getPlayerSeatNo(this.subscription.playerAddress), {
@@ -533,7 +554,7 @@ export class PokerRtcSession {
 
   async handleIncomingVirtualMessage(event) {
     const message = event.messageData;
-    if (message?.type === 'sdp-offer' || message?.type === 'sdp-answer') return;
+    if (SESSION_DESCRIPTION_TYPES.has(message?.type)) return;
     if (message?.rtcDisagreement) {
       await this.handleDisagreementMessage(message);
       return;
@@ -644,7 +665,7 @@ export class PokerRtcSession {
     this.duplicateNextMessage = false;
     let sentCount = 0;
     for (let sendIndex = 0; sendIndex < sendCount; sendIndex += 1) {
-      const result = network.send('outbound', message);
+      const result = network.send(message);
       if (result.ok) sentCount += 1;
     }
     this.logActivity('broadcast message', { type: message?.type ?? 'unknown', openChannels: sentCount });
@@ -699,12 +720,15 @@ export class PokerRtcSession {
   setLocalMediaStream(localMediaStream) {
     if (this.localMediaStream === localMediaStream) return;
     this.localMediaStream = localMediaStream;
+    this.network?.setLocalStream(localMediaStream);
     this.mediaSnapshotVersion += 1;
     this.emitState();
   }
 
   resetForTable() {
-    this.network?.unsubscribe('inbound');
+    this.network?.close();
+    this.network = null;
+    this.networkKey = '';
     this.subscription = null;
     this.connectedPeers.clear();
     this.publishedMessages.clear();
@@ -712,13 +736,13 @@ export class PokerRtcSession {
     this.ready = false;
     this.hasConnectionError = false;
     this.localMediaStream = null;
+    this.remoteMediaStreams = {};
     this.snapshotKey = '';
     this.emitState();
   }
 
   destroy() {
     this.resetForTable();
-    this.routeBus.close();
     this.activityBus.close();
   }
 }

@@ -19,17 +19,11 @@ export function emitLobbyTablesChanged({ lobbyId, tableId, reason = 'table-chang
     reason,
   });
 
-  if (typeof BroadcastChannel !== 'undefined') {
-    const channel = new BroadcastChannel(CHANNEL_NAME);
-    channel.postMessage(payload);
-    channel.close();
-  }
+  if (typeof BroadcastChannel === 'undefined') return;
 
-  try {
-    window.localStorage.setItem(CHANNEL_NAME, JSON.stringify(payload));
-  } catch {
-    // Best-effort cross-tab hint.
-  }
+  const channel = new BroadcastChannel(CHANNEL_NAME);
+  channel.postMessage(payload);
+  channel.close();
 }
 
 export function subscribeLobbyTablesChanged(callback) {
@@ -42,21 +36,11 @@ export function subscribeLobbyTablesChanged(callback) {
     ? new BroadcastChannel(CHANNEL_NAME)
     : null;
   const handleBroadcast = (event) => handleMessage(event.data);
-  const handleStorage = (event) => {
-    if (event.key !== CHANNEL_NAME || !event.newValue) return;
-    try {
-      handleMessage(JSON.parse(event.newValue));
-    } catch {
-      // Ignore malformed messages from older tabs.
-    }
-  };
 
   channel?.addEventListener('message', handleBroadcast);
-  window.addEventListener('storage', handleStorage);
 
   return () => {
     channel?.removeEventListener('message', handleBroadcast);
     channel?.close();
-    window.removeEventListener('storage', handleStorage);
   };
 }

@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { Coins, Plus, Search } from 'lucide-react';
-import { useLobbyRouteKeeper } from '@/hooks/useLobbyRouteKeeper';
+import { useLobbyP2PSession } from '@/hooks/useLobbyP2PSession';
 import PeerWaitRequestDialog from '@/components/lobby/PeerWaitRequestDialog';
 import Panel from '@/components/ui/Panel';
 
@@ -93,6 +93,18 @@ function StatusBadge(props) {
   );
 }
 
+function tableHref(tableId, lobbyId, peerId) {
+  const params = new URLSearchParams({ lobbyId: String(lobbyId) });
+  if (peerId) params.set('peerId', String(peerId));
+  return `/tables/${tableId}?${params.toString()}`;
+}
+
+function createTableHref(lobbyId, peerId) {
+  const params = new URLSearchParams({ lobbyId: String(lobbyId) });
+  if (peerId) params.set('peerId', String(peerId));
+  return `/tables/create?${params.toString()}`;
+}
+
 function TableRow(props) {
   const action = TABLE_ACTION[props.status];
   const cell = props.status === TABLE_STATUS.SEATED
@@ -131,7 +143,7 @@ function TableRow(props) {
 
       <td className={`${cell} rounded-r-xl border-r pl-4 pr-5 text-right`}>
         <a
-          href={`/tables/${props.table.id}`}
+          href={tableHref(props.table.id, props.lobbyId, props.peerId)}
           target="_blank"
           rel="noopener noreferrer"
           className={`${ACTION_BASE} ${action.className}`}
@@ -159,7 +171,13 @@ function TableList(props) {
       )}
       <tbody>
         {props.tables.map((table) => (
-          <TableRow key={table.id} table={table} status={tableStatus(table, props.seated)} />
+          <TableRow
+            key={table.id}
+            table={table}
+            status={tableStatus(table, props.seated)}
+            lobbyId={props.lobbyId}
+            peerId={props.peerId}
+          />
         ))}
         {props.tables.length === 0 && (
           <tr>
@@ -175,11 +193,15 @@ function TableList(props) {
 
 export default function GameLobby(props) {
   const [searchQuery, setSearchQuery] = useState('');
-  const routeKeeper = useLobbyRouteKeeper(props.lobbyId);
+  const p2p = useLobbyP2PSession(props.lobbyId);
 
   const acceptWaitingRequest = (request) => {
-    routeKeeper.acceptWaitingRequest(request);
-    window.open(`/tables/${request.tableId}?lobbyId=${request.lobbyId}`, '_blank', 'noopener,noreferrer');
+    p2p.acceptWaitingRequest(request);
+    window.open(
+      tableHref(request.tableId, request.lobbyId, p2p.peerId),
+      '_blank',
+      'noopener,noreferrer',
+    );
   };
 
   const lobby = useMemo(
@@ -189,11 +211,11 @@ export default function GameLobby(props) {
 
   return (
     <div className="flex w-full flex-col gap-6">
-      {routeKeeper.waitingRequest && (
+      {p2p.waitingRequest && (
         <PeerWaitRequestDialog
-          request={routeKeeper.waitingRequest}
+          request={p2p.waitingRequest}
           onAccept={acceptWaitingRequest}
-          onLater={routeKeeper.rejectWaitingRequest}
+          onLater={p2p.rejectWaitingRequest}
         />
       )}
 
@@ -206,7 +228,12 @@ export default function GameLobby(props) {
             meta="Hands you are seated at. Return to pick up where you left off."
           />
           <div className="mt-5 overflow-x-auto">
-            <TableList tables={lobby.myTables} seated />
+            <TableList
+              tables={lobby.myTables}
+              seated
+              lobbyId={props.lobbyId}
+              peerId={p2p.peerId}
+            />
           </div>
         </Panel>
       )}
@@ -234,7 +261,7 @@ export default function GameLobby(props) {
             </label>
 
             <a
-              href={`/tables/create?lobbyId=${props.lobbyId}`}
+              href={createTableHref(props.lobbyId, p2p.peerId)}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-ember-500 px-5 text-xs font-bold uppercase tracking-[0.14em] text-slate-950 shadow-[0_10px_30px_-10px_rgba(255,165,0,0.8)] transition hover:bg-ember-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-ember-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
@@ -249,6 +276,8 @@ export default function GameLobby(props) {
           <TableList
             tables={lobby.otherTables}
             showHead
+            lobbyId={props.lobbyId}
+            peerId={p2p.peerId}
             emptyText={searchQuery ? `No tables match "${searchQuery}"` : 'No tables yet. Create one to get a game going.'}
           />
         </div>

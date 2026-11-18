@@ -18,6 +18,7 @@ function makePlayersKey(players = []) {
 
 function makeSessionConfigKey({
   playerAddress,
+  peerId,
   operator,
   tableId,
   lobbyId,
@@ -29,6 +30,7 @@ function makeSessionConfigKey({
 }) {
   return [
     normalizeAddress(playerAddress),
+    peerId ?? '',
     normalizeAddress(operator),
     tableId ?? '',
     lobbyId ?? '',
@@ -50,6 +52,7 @@ const makeBlsActionKey = ({ playerAddress, lobbyId, tableId }) => [
 export function useNetwork({
   tableId,
   lobbyId,
+  peerId = null,
   tableDetails,
   seats = [],
   onActivity,
@@ -117,6 +120,7 @@ export function useNetwork({
     }
     session.update({
       playerAddress,
+      peerId,
       operator: keys.operator,
       tableId,
       lobbyId,
@@ -137,6 +141,7 @@ export function useNetwork({
     localMediaStream,
     lobbyId,
     mySeatAnnouncePublicKey,
+    peerId,
     playerAddress,
     players,
     session,
@@ -152,6 +157,7 @@ export function useNetwork({
   useEffect(() => {
     const sessionConfigKey = makeSessionConfigKey({
       playerAddress,
+      peerId,
       operator,
       tableId,
       lobbyId,
@@ -174,6 +180,7 @@ export function useNetwork({
     });
     session.update({
       playerAddress,
+      peerId,
       operator,
       tableId,
       lobbyId,
@@ -191,6 +198,7 @@ export function useNetwork({
     localMediaStream,
     lobbyId,
     onActivity,
+    peerId,
     playerAddress,
     players,
     playersKey,

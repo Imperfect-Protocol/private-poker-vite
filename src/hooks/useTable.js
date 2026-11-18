@@ -57,6 +57,7 @@ const makeSeatsKey = (seats) => seats
 export function useTable({
   tableId,
   lobbyId,
+  peerId = null,
   initialTableData = null,
   initialIsSeated = null,
   onActivity,
@@ -106,6 +107,7 @@ export function useTable({
     network: {
       tableId: activeTableId,
       lobbyId,
+      peerId,
       tableDetails: tableSessionDetails,
       seats,
       onActivity,

@@ -1,60 +1,57 @@
 # Private Poker P2P Boundary
 
-`private-poker-vite` no longer owns raw WebRTC signalling code. The app uses the standalone
-`privatepoker-p2p` package for connection establishment, mesh fallback, P2P relay, route
-preservation, and connection-state events.
+`private-poker-vite` owns no raw WebRTC signalling. The `privatepoker-p2p` package owns
+connection establishment, mesh fallback, neural relay, and connection-state events.
 
-## App Responsibilities
+## Tab ownership
 
-The Vite app owns poker-specific orchestration:
+- The **Lobby tab** owns every background P2P edge. `useLobbyP2PSession` constructs one
+  `LobbyP2PSession`; that session owns the only neural routing node and answers table
+  discovery requests over `BroadcastChannel`.
+- A **Table tab** owns exactly one direct subscription. `PokerRtcSession` constructs a
+  `TableP2PSession` with the parent Lobby's `peerId` (passed in the table URL). It asks
+  the Lobby for peers and tunnels signalling through the Lobby's background edge until
+  the direct edge is open.
+- No tab uses browser storage. All P2P state is in memory and dies with the tab.
+
+## App responsibilities
 
 - `src/hooks/useTable.js` chooses the previous occupied seat in the token-ring topology.
-- `src/hooks/useNetwork.js` prepares deterministic table BLS keys and wires React callbacks.
-- `src/lib/PokerRtcSession.js` adapts poker transport messages to `VirtualNetwork.subscribe()`
-  and `VirtualNetwork.send()`.
-- `src/hooks/useLobbyRouteKeeper.js` starts the lobby background route keeper while the lobby
-  tab is open.
+- `src/hooks/useNetwork.js` prepares deterministic table BLS keys, supplies the parent
+  `peerId`, and wires React callbacks.
+- `src/lib/PokerRtcSession.js` adapts poker transport messages to
+  `TableP2PSession.subscribe()`, `send()`, and `setLocalStream()`.
+- `src/hooks/useLobbyP2PSession.js` connects the Lobby tab to its session and surfaces
+  waiting-peer prompts. `WaitingPromptPolicy` lives in `src/lib/lobby/`.
 
-Poker messages are BLS-signed in `PokerRtcSession` before they are sent. Incoming poker messages
-are verified against the announce public key stored on-chain before they are passed into the
-table state machine.
+Poker messages are BLS-signed in `PokerRtcSession` before being sent. Incoming poker
+messages are verified against the announce public key stored on-chain before they reach
+the table state machine.
 
-## Library Responsibilities
+## Library responsibilities
 
-The `privatepoker-p2p` package owns P2P mechanics:
+- `LobbyP2PSession` establishes background WebRTC edges on the Lobby's table `0`.
+- `TableP2PSession` establishes the table's direct WebRTC edge.
+- `BackgroundConnectionKeeper` keys background edges by peer address and answers
+  table find-peer requests.
+- `TableTunnelServer` relays table signalling through the Lobby's background edge.
 
-- `VirtualNetwork.subscribe(subscriptionLabel, channelLabel, peerAddress, timeout, lobbyId, tableId)`
-  establishes a WebRTC data channel.
-- `VirtualNetwork.send(channelLabel, message)` sends application data over the established channel.
-- `LobbyRouteKeeper` maintains lobby-level background P2P routes with `tableId=0`.
-- `RouteStore` records active background routes so new table tabs can try P2P first.
-- `RouteBus` carries local route-preservation requests between table tabs and the lobby tab.
-- The library control worker registers lobby presence immediately as `role=lobby`, `tableId=0`,
-  so control messages have a concrete lobby endpoint to route to before any visible table
-  subscription is active.
-
-## Runtime Flow
+## Runtime flow
 
 ```mermaid
 sequenceDiagram
-  participant Table as Table tab
-  participant P2P as privatepoker-p2p
-  participant Mesh as Private Mesh
   participant Lobby as Lobby tab
+  participant Table as Table tab
+  participant Bus as BroadcastChannel
+  participant Peer as Other peer
 
-  Table->>P2P: subscribe("inbound", "outbound", peer, 10s)
-  alt route exists
-    P2P->>P2P: try P2P network first
-  else no route exists
-    P2P->>Mesh: announce via mesh fallback
-  end
-  P2P-->>Table: PeerConnected
-  Table->>P2P: RouteBus.keep-route
-  P2P-->>Lobby: PreserveRouteAccepted
-  Lobby->>P2P: register worker presence as lobby/tableId=0
-  Lobby->>P2P: subscribe(lobby route, peer, tableId=0)
-  P2P-->>Lobby: PeerConnected
+  Lobby->>Lobby: LobbyP2PSession starts background edge on table 0
+  Table->>Bus: find peer (lobbyId, tableId, parent peerId)
+  Bus->>Lobby: find peer
+  Lobby->>Peer: background signalling establishes edge
+  Lobby-->>Bus: peer route ready
+  Bus-->>Table: route ready
+  Table->>Peer: direct WebRTC offer, tunnelled via Lobby
+  Peer-->>Table: answer
+  Table->>Table: PeerConnected, poker BLS messages can flow
 ```
-
-On later table rejoins, `PokerRtcSession` asks `RouteStore` whether the lobby has a background
-route to the peer. If yes, `VirtualNetwork` starts with P2P signalling instead of mesh.

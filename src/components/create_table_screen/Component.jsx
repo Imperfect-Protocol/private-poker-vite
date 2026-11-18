@@ -22,6 +22,7 @@ export default function CreateTableScreen() {
   const router = useRouter();
 
   const lobbyId = searchParams.get('lobbyId') || "1";
+  const peerId = searchParams.get('peerId');
   const [previewName, setPreviewName] = useState("New Player Table");
   const [createdTableData, setCreatedTableData] = useState(null);
   const [hasJoinedTable, setHasJoinedTable] = useState(false);
@@ -49,11 +50,9 @@ export default function CreateTableScreen() {
     };
     setCreatedTableData(nextTableData);
     setHasJoinedTable(true);
-    window.sessionStorage.setItem(
-      `private-poker:new-table:${createRequest.tableId}`,
-      JSON.stringify({ tableData: nextTableData, isSeated: true }),
-    );
-    router.push(`/tables/${createRequest.tableId}?lobbyId=${createRequest.lobbyId}`);
+    const params = new URLSearchParams({ lobbyId: String(createRequest.lobbyId), seated: '1' });
+    if (peerId) params.set('peerId', peerId);
+    router.push(`/tables/${createRequest.tableId}?${params.toString()}`);
   };
 
   const handleOperatorTopUp = ({ operator, requiredAmount }) => {

@@ -17,21 +17,6 @@ import { submitConsoleLine } from '@/lib/crum_pkr';
 import { emitLobbyTablesChanged } from '@/lib/lobbyEvents';
 import { VirtualNetworkActivityBus } from 'privatepoker-p2p';
 
-const readCreatedTableSnapshot = (tableId) => {
-  if (typeof window === 'undefined') return null;
-
-  try {
-    const key = `private-poker:new-table:${tableId}`;
-    const rawSnapshot = window.sessionStorage.getItem(key);
-    if (!rawSnapshot) return null;
-
-    window.sessionStorage.removeItem(key);
-    return JSON.parse(rawSnapshot);
-  } catch {
-    return null;
-  }
-};
-
 const formatSeatAddress = (address) => (address ? address.slice(2, 4).toUpperCase() : 'Peer');
 const ensureHexPrefix = (value) => {
   const normalized = String(value ?? '');
@@ -164,12 +149,7 @@ class DebugActivitySubscriber {
   }
 }
 
-export default function TableClient({ tableId, lobbyId, initialTableData = null, initialIsSeated = null }) {
-  const [initialSnapshot] = useState(() => readCreatedTableSnapshot(tableId));
-
-  const bootTableData = initialTableData ?? initialSnapshot?.tableData ?? null;
-  const bootIsSeated = initialIsSeated ?? initialSnapshot?.isSeated ?? null;
-
+export default function TableClient({ tableId, lobbyId, peerId, initialTableData = null, initialIsSeated = null }) {
   const tableRef = useRef(null);
   const pokerTableRef = useRef(null);
   const lastProtocolActionKeyRef = useRef(null);
@@ -262,8 +242,9 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
   const table = useTable({
     tableId,
     lobbyId,
-    initialTableData: bootTableData,
-    initialIsSeated: bootIsSeated,
+    peerId,
+    initialTableData,
+    initialIsSeated,
     onActivity: handleRtcActivity,
     onSeat: handleSeatEvent,
     networkEnabled,

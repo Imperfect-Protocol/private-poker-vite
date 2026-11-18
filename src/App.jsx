@@ -22,6 +22,8 @@ function TableRoute() {
     <TableClient
       tableId={id ?? '1'}
       lobbyId={searchParams.get('lobbyId') ?? '1'}
+      peerId={searchParams.get('peerId')}
+      initialIsSeated={searchParams.get('seated') === '1' ? true : null}
     />
   );
 }
