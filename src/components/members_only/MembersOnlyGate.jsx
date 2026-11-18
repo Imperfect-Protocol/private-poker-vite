@@ -1,45 +1,34 @@
-import { useEffect, useState } from 'react';
 import { useMemberAccess } from '@/hooks/useMemberAccess';
 import MembersOnlyArea from '@/components/members_only/MembersOnlyArea';
-
-function MembershipPending() {
-  const [dotCount, setDotCount] = useState(1);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setDotCount((current) => (current >= 3 ? 1 : current + 1));
-    }, 333);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  return (
-    <div className="fixed inset-0 z-[200] flex min-h-screen items-center justify-center bg-black px-6">
-      <div className="w-16 text-left font-mono text-3xl font-black tracking-[0.2em] text-teal-900/70">
-        {'.'.repeat(dotCount)}
-      </div>
-    </div>
-  );
-}
+import LoadingSplash from '@/components/splash/LoadingSplash';
 
 export default function MembersOnlyGate({ children }) {
-  const { accountStatus, isAccessPending, isMember } = useMemberAccess();
+  const { accountStatus, hasCurrentWalletKeypair, isAccessPending, isMember } = useMemberAccess();
 
-  if (isAccessPending) {
-    return <MembershipPending />;
-  }
-
-  if (!isMember) {
-    return (
-      <div className="animate-[membership-fade-in_320ms_ease-out_both]">
-        <MembersOnlyArea accountStatus={accountStatus} />
-      </div>
-    );
-  }
+  // A restored session means the player is very likely a member, so start
+  // loading the page underneath the splash while the chain checks finish.
+  const shouldPreload = isAccessPending && hasCurrentWalletKeypair;
 
   return (
-    <div className="animate-[membership-fade-in_320ms_ease-out_both]">
-      {children}
-    </div>
+    <>
+      {(isMember || shouldPreload) && (
+        <div
+          aria-hidden={shouldPreload || undefined}
+          className={isMember
+            ? 'animate-[membership-fade-in_320ms_ease-out_both]'
+            : 'invisible'}
+        >
+          {children}
+        </div>
+      )}
+
+      {!isAccessPending && !isMember && (
+        <div className="animate-[membership-fade-in_320ms_ease-out_both]">
+          <MembersOnlyArea accountStatus={accountStatus} />
+        </div>
+      )}
+
+      {isAccessPending && <LoadingSplash />}
+    </>
   );
 }

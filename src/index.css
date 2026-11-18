@@ -126,3 +126,13 @@ select {
     opacity: 1;
   }
 }
+
+@keyframes splash-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}

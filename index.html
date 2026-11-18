@@ -4,7 +4,19 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/jpeg" href="/favicon.jpg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#090506" />
     <title>Private Poker</title>
+
+    <!-- Dark first paint: the app CSS is loaded by JS, so the shell would otherwise flash white. -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background-color: #090506;
+        color-scheme: dark;
+      }
+    </style>
 
     <meta name="title" content="Private Poker">
     <meta name="description" content="A peer-to-peer poker game on Arbitrum blockchain">
