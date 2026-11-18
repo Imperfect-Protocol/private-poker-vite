@@ -162,6 +162,7 @@ export default function TableClient({ tableId, lobbyId, peerId, initialTableData
   const [showReJoinDialog, setShowReJoinDialog] = useState(false);
   const [forceHideReJoinDialog, setForceHideReJoinDialog] = useState(false);
   const [reJoinDismissed, setReJoinDismissed] = useState(false);
+  const [peerWaitDismissed, setPeerWaitDismissed] = useState(false);
   const [showDebugConsole, setShowDebugConsole] = useState(false);
   const [topUpRequest, setTopUpRequest] = useState(null);
   const [showMediaDataChannelDialog, setShowMediaDataChannelDialog] = useState(false);
@@ -292,7 +293,10 @@ export default function TableClient({ tableId, lobbyId, peerId, initialTableData
     && !forceHideReJoinDialog
     && !joinRequest
     && !p2pEstablished
-    && (peerDecisionState === 'PeerWaiting' || peerDecisionState === 'PeerRejected')
+    && (
+      peerDecisionState === 'PeerRejected'
+      || (peerDecisionState === 'PeerWaiting' && !peerWaitDismissed)
+    )
   );
   const consoleIdentity = useMemo(() => {
     const playerAddress = table.currentSeat?.playerAddress;
@@ -415,6 +419,11 @@ export default function TableClient({ tableId, lobbyId, peerId, initialTableData
     setShowReJoinDialog(true);
   }, [forceHideReJoinDialog, joinRequest, p2pEstablished, showReJoinDialog, table.hasJoinedTable]);
 
+  useEffect(() => {
+    if (peerDecisionState === 'PeerWaiting') return;
+    setPeerWaitDismissed(false);
+  }, [peerDecisionState]);
+
   if (table.isLoading || !table.tableData) {
     return (
       <main className="min-h-screen bg-page flex items-center justify-center">
@@ -533,7 +542,7 @@ export default function TableClient({ tableId, lobbyId, peerId, initialTableData
         <PeerWaitStatusDialog
           status={peerDecisionState}
           peerAddress={table.networkSnapshot?.inboundPeerAddress}
-          onClose={handleCloseTab}
+          onClose={peerDecisionState === 'PeerWaiting' ? () => setPeerWaitDismissed(true) : handleCloseTab}
         />
       )}
 

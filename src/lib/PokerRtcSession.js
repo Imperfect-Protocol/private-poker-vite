@@ -403,7 +403,7 @@ export class PokerRtcSession {
     });
   }
 
-  subscribeTo(peerPlayerAddress, peerAnnouncePubKey, callback) {
+  subscribeTo(peerPlayerAddress, peerAnnouncePubKey, callback, { poke = false } = {}) {
     const peerKey = normalizeAddress(peerPlayerAddress);
     const network = this.ensureNetwork();
     if (!peerKey || !network) return;
@@ -417,15 +417,14 @@ export class PokerRtcSession {
       playerAddress: peerPlayerAddress,
     });
     this.emitState();
-    network.subscribe(
-      peerPlayerAddress,
-      String(this.config.lobbyId),
-      String(this.config.tableId),
-    );
+    const lobbyId = String(this.config.lobbyId);
+    const tableId = String(this.config.tableId);
+    const poked = poke && network.poke(peerPlayerAddress, lobbyId, tableId).ok;
+    if (!poked) network.subscribe(peerPlayerAddress, lobbyId, tableId);
   }
 
   pokeInboundConnection(peerPlayerAddress, peerAnnouncePubKey, callback) {
-    this.subscribeTo(peerPlayerAddress, peerAnnouncePubKey, callback);
+    this.subscribeTo(peerPlayerAddress, peerAnnouncePubKey, callback, { poke: true });
   }
 
   handleVirtualNetworkEvent(event) {

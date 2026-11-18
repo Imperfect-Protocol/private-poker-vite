@@ -91,25 +91,12 @@ export default function ReJoinTableFlowDialog({
   networkSnapshot,
   onEnableNetwork,
   onReady,
-  onRejectedClose,
 }) {
   const startedRef = useRef(false);
   const readyRef = useRef(false);
-  const pokeSearchTimerRef = useRef(null);
   const [signatureStatus, setSignatureStatus] = useState('unverified');
   const [error, setError] = useState('');
-  const [isSearchCycleActive, setIsSearchCycleActive] = useState(true);
-
-  const startSearchCycle = () => {
-    if (pokeSearchTimerRef.current) {
-      clearTimeout(pokeSearchTimerRef.current);
-    }
-    setIsSearchCycleActive(true);
-    pokeSearchTimerRef.current = setTimeout(() => {
-      pokeSearchTimerRef.current = null;
-      setIsSearchCycleActive(false);
-    }, POKE_SEARCH_MS);
-  };
+  const [searchExpired, setSearchExpired] = useState(false);
 
   useEffect(() => {
     if (startedRef.current) return;
@@ -131,15 +118,6 @@ export default function ReJoinTableFlowDialog({
     run();
   }, [onEnableNetwork, table]);
 
-  useEffect(() => {
-    startSearchCycle();
-    return () => {
-      if (pokeSearchTimerRef.current) {
-        clearTimeout(pokeSearchTimerRef.current);
-      }
-    };
-  }, []);
-
   const lobbyState = networkSnapshot?.lobbyState ?? 'Waiting';
   const inboundState = networkSnapshot?.inboundState ?? 'None';
   const outboundState = networkSnapshot?.outboundState ?? 'None';
@@ -155,7 +133,7 @@ export default function ReJoinTableFlowDialog({
     && !isInboundConnected
     && !isPeerWaiting
     && !isPeerRejected
-    && (isConnectionFailure(inboundState) || !isSearchCycleActive);
+    && (isConnectionFailure(inboundState) || searchExpired);
   const eventsTone = isLobbyConnected ? connectionTone(inboundState) : StepTone.WAITING;
   const eventsStatus = isLobbyConnected ? inboundStatusText(inboundState) : '';
   const actionsTone = isLobbyConnected ? connectionTone(outboundState) : StepTone.WAITING;
@@ -164,28 +142,21 @@ export default function ReJoinTableFlowDialog({
     && isLobbyConnected
     && isInboundConnected
     && isOutboundConnected;
-  const title = isPeerRejected
-    ? 'Peer Rejected'
-    : isPeerWaiting
-      ? 'Peer Notified'
-      : isLobbyFailed
-        ? 'Lobby Offline'
-        : 'Joining P2P Network';
-  const description = isPeerRejected
-    ? 'The other player rejected your offer.'
-    : isPeerWaiting
-      ? 'The other peer was notified. Waiting for them to accept.'
-      : isLobbyFailed
-        ? 'The Lobby tab did not answer. Keep the Lobby tab open and Poke to retry the background connection.'
-        : 'We will restore your table session, connect through the Lobby, and open the inbound and outbound poker channels. The table stays locked until every channel is ready.';
+  const title = isLobbyFailed ? 'Lobby Offline' : 'Joining P2P Network';
+  const description = isLobbyFailed
+    ? 'The Lobby tab did not answer. Keep the Lobby tab open and Poke to retry the background connection.'
+    : 'We will restore your table session, connect through the Lobby, and open the inbound and outbound poker channels. The table stays locked until every channel is ready.';
+
+  useEffect(() => {
+    if (!isLobbyConnected) return undefined;
+    setSearchExpired(false);
+    const timer = setTimeout(() => setSearchExpired(true), POKE_SEARCH_MS);
+    return () => clearTimeout(timer);
+  }, [isLobbyConnected]);
 
   useEffect(() => {
     if (!isInboundConnected && !isPeerWaiting && !isPeerRejected) return;
-    if (pokeSearchTimerRef.current) {
-      clearTimeout(pokeSearchTimerRef.current);
-      pokeSearchTimerRef.current = null;
-    }
-    setIsSearchCycleActive(false);
+    setSearchExpired(false);
   }, [isInboundConnected, isPeerRejected, isPeerWaiting]);
 
   useEffect(() => {
@@ -196,16 +167,11 @@ export default function ReJoinTableFlowDialog({
 
   const retryConnection = async () => {
     setError('');
-    startSearchCycle();
+    setSearchExpired(false);
     try {
       await table.retryInboundConnection?.();
     } catch (err) {
       console.error(err);
-      if (pokeSearchTimerRef.current) {
-        clearTimeout(pokeSearchTimerRef.current);
-        pokeSearchTimerRef.current = null;
-      }
-      setIsSearchCycleActive(false);
       setError(err.shortMessage || err.details || err.message || 'Connection retry failed.');
     }
   };
@@ -216,10 +182,7 @@ export default function ReJoinTableFlowDialog({
       description={description}
       error={error}
       isComplete={isComplete}
-      showOk={isPeerRejected}
-      okLabel="Close"
-      canOkOverride={isPeerRejected}
-      onOk={onRejectedClose}
+      showOk={false}
       steps={[
         {
           id: 'security',
