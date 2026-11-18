@@ -2,6 +2,8 @@ import { BrowserRouter, Navigate, Routes, Route, Outlet, useParams, useSearchPar
 import AccountSignin from '@/components/account_signin/Component';
 import SiteLayout from '@/components/layout/SiteLayout';
 import AboutPage from '@/app/(site)/about/AboutPage';
+import FaucetPage from '@/app/(site)/faucet/FaucetPage';
+import GetStartedPage from '@/app/(site)/get-started/GetStartedPage';
 import CreateTablePage from '@/app/tables/create/CreateTablePage';
 import LeaderboardPage from '@/app/(site)/leaderboard/LeaderboardPage';
 import LobbyClient from '@/components/lobby/LobbyClient';
@@ -52,6 +54,8 @@ export default function App() {
         <Route element={<SiteRouteLayout />}>
           <Route path="/signin" element={<AccountSignin />} />
           <Route path="/main-lobby" element={<MembersOnlyRoute><MainLobbyPage /></MembersOnlyRoute>} />
+          <Route path="/get-started" element={<GetStartedPage />} />
+          <Route path="/faucet" element={<FaucetPage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="/leaderboard" element={<LeaderboardPage />} />
           <Route path="/lobby/:id" element={<MembersOnlyRoute><LobbyRoute /></MembersOnlyRoute>} />
