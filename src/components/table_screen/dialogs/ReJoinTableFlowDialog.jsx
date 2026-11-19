@@ -4,8 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import { MousePointerClick, Spade } from 'lucide-react';
 import FlowStepDialog from '@/components/table_screen/dialogs/FlowStepDialog';
 
-const POKE_SEARCH_MS = 10000;
-
 const StepTone = Object.freeze({
   WAITING: 'waiting',
   PENDING: 'pending',
@@ -96,7 +94,6 @@ export default function ReJoinTableFlowDialog({
   const readyRef = useRef(false);
   const [signatureStatus, setSignatureStatus] = useState('unverified');
   const [error, setError] = useState('');
-  const [searchExpired, setSearchExpired] = useState(false);
 
   useEffect(() => {
     if (startedRef.current) return;
@@ -128,12 +125,14 @@ export default function ReJoinTableFlowDialog({
   const isPeerWaiting = inboundState === 'PeerWaiting';
   const isPeerRejected = inboundState === 'PeerRejected';
   const canPokeNetwork = signatureStatus === 'active' && isLobbyFailed && !isInboundConnected;
+  // Poke is a retry, not a head start: only offer it once the attempt has
+  // actually failed or timed out.
   const canPokeEvents = signatureStatus === 'active'
     && isLobbyConnected
     && !isInboundConnected
     && !isPeerWaiting
     && !isPeerRejected
-    && (isConnectionFailure(inboundState) || searchExpired);
+    && isConnectionFailure(inboundState);
   const eventsTone = isLobbyConnected ? connectionTone(inboundState) : StepTone.WAITING;
   const eventsStatus = isLobbyConnected ? inboundStatusText(inboundState) : '';
   const actionsTone = isLobbyConnected ? connectionTone(outboundState) : StepTone.WAITING;
@@ -148,18 +147,6 @@ export default function ReJoinTableFlowDialog({
     : 'We will restore your table session, connect through the Lobby, and open the inbound and outbound poker channels. The table stays locked until every channel is ready.';
 
   useEffect(() => {
-    if (!isLobbyConnected) return undefined;
-    setSearchExpired(false);
-    const timer = setTimeout(() => setSearchExpired(true), POKE_SEARCH_MS);
-    return () => clearTimeout(timer);
-  }, [isLobbyConnected]);
-
-  useEffect(() => {
-    if (!isInboundConnected && !isPeerWaiting && !isPeerRejected) return;
-    setSearchExpired(false);
-  }, [isInboundConnected, isPeerRejected, isPeerWaiting]);
-
-  useEffect(() => {
     if (!isComplete || readyRef.current) return;
     readyRef.current = true;
     onReady?.();
@@ -167,7 +154,6 @@ export default function ReJoinTableFlowDialog({
 
   const retryConnection = async () => {
     setError('');
-    setSearchExpired(false);
     try {
       await table.retryInboundConnection?.();
     } catch (err) {

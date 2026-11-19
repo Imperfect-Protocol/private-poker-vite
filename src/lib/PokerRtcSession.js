@@ -40,6 +40,7 @@ const VISIBLE_SIGNAL_STEPS = new Set([
   'AnswerCreating',
   'AnswerSent',
   'AnswerReceived',
+  'AnswerSuppressed',
   'SignalRelayed',
   'RouteAvailable',
 ]);

@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { Coins, Plus, Search } from 'lucide-react';
-import { useLobbyP2PSession } from '@/hooks/useLobbyP2PSession';
+import { useLobbyP2PSession } from '@/contexts/LobbyP2PContext.js';
 import PeerWaitRequestDialog from '@/components/lobby/PeerWaitRequestDialog';
 import Panel from '@/components/ui/Panel';
 
@@ -193,7 +193,7 @@ function TableList(props) {
 
 export default function GameLobby(props) {
   const [searchQuery, setSearchQuery] = useState('');
-  const p2p = useLobbyP2PSession(props.lobbyId);
+  const p2p = useLobbyP2PSession();
 
   const acceptWaitingRequest = (request) => {
     p2p.acceptWaitingRequest(request);
