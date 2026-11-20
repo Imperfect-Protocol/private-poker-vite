@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
-import { Check, Copy, Mail, X } from 'lucide-react';
+import { useConnection } from 'wagmi';
+import { Mail, Wallet, X } from 'lucide-react';
+import CopyValueRow from '@/components/ui/CopyValueRow';
 import { useCopyFeedback } from '@/hooks/useCopyFeedback';
 
 export const CONTACT_EMAIL = 'info@contact.imperfectprotocol.ie';
@@ -24,7 +26,10 @@ const COPY_BY_MODE = {
 
 export default function ContactVerifyDialog({ mode = 'contact', onClose }) {
   const copy = COPY_BY_MODE[mode] ?? COPY_BY_MODE.contact;
-  const { copied, copy: copyEmail } = useCopyFeedback();
+  const { address } = useConnection();
+  const emailCopy = useCopyFeedback();
+  const addressCopy = useCopyFeedback();
+  const walletAddress = address ?? '';
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -51,7 +56,7 @@ export default function ContactVerifyDialog({ mode = 'contact', onClose }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="contact-verify-title"
-        className="relative z-10 w-full max-w-md overflow-hidden rounded-2xl border border-teal-500/30 bg-slate-900/95 shadow-[0_0_50px_rgba(225,29,72,0.18)] backdrop-blur-xl"
+        className="relative z-10 w-full max-w-lg overflow-hidden rounded-2xl border border-teal-500/30 bg-slate-900/95 shadow-[0_0_50px_rgba(225,29,72,0.18)] backdrop-blur-xl"
       >
         <div className="flex items-start justify-between gap-4 border-b border-white/10 bg-slate-950/50 p-6">
           <div>
@@ -80,27 +85,28 @@ export default function ContactVerifyDialog({ mode = 'contact', onClose }) {
             {copy.body}
           </p>
 
-          <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-slate-950/70 p-3">
-            <Mail size={16} aria-hidden className="shrink-0 text-cyan-200" />
-            <span className="min-w-0 flex-1 break-all font-mono text-xs leading-5 text-slate-100">
-              {copy.email}
-            </span>
-            <button
-              type="button"
-              onClick={() => copyEmail(copy.email)}
-              aria-label={copied ? 'Copied' : 'Copy email address'}
-              title={copied ? 'Copied' : 'Copy email address'}
-              className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-colors ${
-                copied
-                  ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-300'
-                  : 'border-white/10 text-slate-300 hover:border-cyan-400/40 hover:text-cyan-100'
-              }`}
-            >
-              {copied
-                ? <Check size={16} aria-hidden />
-                : <Copy size={16} aria-hidden />}
-            </button>
-          </div>
+          <CopyValueRow
+            icon={<Mail size={16} aria-hidden />}
+            value={copy.email}
+            copied={emailCopy.copied}
+            onCopy={() => emailCopy.copy(copy.email)}
+            label="Copy email address"
+          />
+
+          {mode === 'verify' && (
+            <>
+              <p className="text-sm leading-6 text-slate-300">
+                Include your ETH address:
+              </p>
+              <CopyValueRow
+                icon={<Wallet size={16} aria-hidden />}
+                value={walletAddress}
+                copied={addressCopy.copied}
+                onCopy={() => addressCopy.copy(walletAddress)}
+                label="Copy ETH address"
+              />
+            </>
+          )}
 
           <p className="font-mono text-[10px] uppercase leading-5 tracking-[0.18em] text-slate-500">
             {copy.note}
