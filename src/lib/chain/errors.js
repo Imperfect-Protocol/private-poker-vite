@@ -65,3 +65,12 @@ export function formatChainError(error, fallback = 'Transaction failed.') {
   if (parts.length > 0) return parts.join('\n');
   return asText(error) || fallback;
 }
+
+/**
+ * The full chain error belongs in the console. UI surfaces get one short line
+ * so long RPC and ABI dumps cannot break the layout.
+ */
+export function formatShortChainError(error, fallback = 'Transaction failed.', maxLength = 160) {
+  const message = formatChainError(error, fallback).replace(/\s+/g, ' ').trim() || fallback;
+  return message.length > maxLength ? `${message.slice(0, maxLength - 1)}…` : message;
+}

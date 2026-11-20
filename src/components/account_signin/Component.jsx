@@ -1,13 +1,17 @@
 "use client";
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Check, CircleAlert, Coins, KeyRound, Lock, Pencil, PenLine, ShieldAlert, ShieldX, Wallet, Zap } from 'lucide-react';
+import { useDisconnect } from 'wagmi';
+import { Check, CircleAlert, Coins, KeyRound, Lock, Pencil, PenLine, ShieldX, Wallet, Zap } from 'lucide-react';
+import { useAccountSession } from '@/contexts/AccountSessionContext.jsx';
 import { ACCOUNT_STATUS, useAccounts } from '@/hooks/useAccounts';
 import { useMemberAccess } from '@/hooks/useMemberAccess';
 import { usePpdcBalance } from '@/hooks/usePpdcBalance';
 import FlowStepDialog from '@/components/table_screen/dialogs/FlowStepDialog';
 import LoadingSplash from '@/components/splash/LoadingSplash';
+import TermsAcceptanceDialog from '@/components/account_signin/TermsAcceptanceDialog';
+import VerificationPendingDialog from '@/components/account_signin/VerificationPendingDialog';
 import Panel from '@/components/ui/Panel';
 
 const STEPS = [
@@ -210,6 +214,7 @@ function SigninStep(props) {
 function ProfileStep(props) {
   const accounts = props.accounts;
   const isEditing = accounts.profileMode === 'edit';
+  const isNewAccount = !props.hasExistingAccount;
   const isVerifiedSubscriptionProfile = accounts.accountStatus === ACCOUNT_STATUS.VERIFIED && !accounts.isSubscriptionActive;
 
   return (
@@ -254,7 +259,11 @@ function ProfileStep(props) {
 
       <ErrorNotice message={accounts.error} />
 
-      {isEditing ? (
+      {isNewAccount ? (
+        <button type="button" onClick={props.onRequestCreate} className={PRIMARY_BUTTON}>
+          Create account
+        </button>
+      ) : isEditing ? (
         <button type="button" onClick={accounts.handleProfileSave} disabled={accounts.isSavingProfile} className={PRIMARY_BUTTON}>
           {accounts.isSavingProfile ? 'Saving...' : 'Continue'}
         </button>
@@ -268,32 +277,22 @@ function ProfileStep(props) {
 }
 
 function StatusStep(props) {
-  const notice = accountStatusNotice(props.status);
-  const isDanger = notice.tone === 'danger';
+  const notice = props.notice;
 
   return (
     <div>
       <StepHeader step="status" title="Verification" description="New accounts are verified before they can subscribe." />
-      <div className={`mt-6 flex gap-4 rounded-xl border p-5 ${isDanger ? 'border-red-500/30 bg-red-950/25' : 'border-cyan-400/20 bg-cyan-400/[0.05]'}`}>
-        <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-lg ${isDanger ? 'bg-red-500/15 text-red-300' : 'bg-cyan-400/15 text-cyan-200'}`}>
-          {isDanger ? <ShieldX size={20} aria-hidden="true" /> : <ShieldAlert size={20} aria-hidden="true" />}
-        </span>
-        <div>
-          <p className="font-bold text-slate-50">{notice.title}</p>
-          <p className="mt-1 text-sm leading-6 text-slate-300">
-            {notice.body}
-            {notice.email && (
-              <>
-                {' '}
-                <a href={`mailto:${notice.email}`} className="font-semibold text-cyan-200 underline decoration-cyan-200/40 underline-offset-4 hover:decoration-cyan-200">
-                  {notice.email}
-                </a>
-                .
-              </>
-            )}
-          </p>
+      {notice.tone === 'danger' && (
+        <div className="mt-6 flex gap-4 rounded-xl border border-red-500/30 bg-red-950/25 p-5">
+          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-red-500/15 text-red-300">
+            <ShieldX size={20} aria-hidden="true" />
+          </span>
+          <div>
+            <p className="font-bold text-slate-50">{notice.title}</p>
+            <p className="mt-1 text-sm leading-6 text-slate-300">{notice.body}</p>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -335,8 +334,16 @@ function SubscriptionStep(props) {
 
 function AccountStep(props) {
   if (props.accounts.step === 'signin') return <SigninStep accounts={props.accounts} hasExistingAccount={props.hasExistingAccount} />;
-  if (props.accounts.step === 'status') return <StatusStep status={props.accounts.accountStatus} />;
-  if (props.accounts.step === 'profile') return <ProfileStep accounts={props.accounts} />;
+  if (props.accounts.step === 'status') return <StatusStep notice={props.notice} />;
+  if (props.accounts.step === 'profile') {
+    return (
+      <ProfileStep
+        accounts={props.accounts}
+        hasExistingAccount={props.hasExistingAccount}
+        onRequestCreate={props.onRequestCreate}
+      />
+    );
+  }
   return <SubscriptionStep accounts={props.accounts} />;
 }
 
@@ -344,7 +351,10 @@ export default function AccountSignin() {
   const accounts = useAccounts();
   const memberAccess = useMemberAccess();
   const { hasPpdc, isChecking: isCheckingPpdc } = usePpdcBalance();
+  const { clearSession } = useAccountSession();
+  const { disconnect } = useDisconnect();
   const navigate = useNavigate();
+  const [isAcceptingTerms, setIsAcceptingTerms] = useState(false);
   const hasExistingAccount = memberAccess.accountStatus !== ACCOUNT_STATUS.NONE;
   const needsSetup = memberAccess.isWalletConnected
     && !memberAccess.hasCurrentWalletKeypair
@@ -359,10 +369,28 @@ export default function AccountSignin() {
   const operationDialogOkLabel = accounts.operationDialog?.error && !accounts.operationDialog?.isComplete
     ? 'Close'
     : 'Continue';
+  const statusNotice = accountStatusNotice(accounts.accountStatus);
+  const isVerificationPending = accounts.step === 'status' && statusNotice.tone === 'pending';
 
   useEffect(() => {
     if (needsSetup) navigate('/get-started', { replace: true });
   }, [needsSetup, navigate]);
+
+  const handleRejectTerms = () => {
+    setIsAcceptingTerms(false);
+    navigate('/');
+  };
+
+  const handleAcceptTerms = () => {
+    setIsAcceptingTerms(false);
+    accounts.handleProfileContinue();
+  };
+
+  const handleBackHome = () => {
+    clearSession();
+    disconnect();
+    window.location.replace('/');
+  };
 
   return (
     <>
@@ -409,12 +437,24 @@ export default function AccountSignin() {
                 Checking your account...
               </div>
             ) : (
-              <AccountStep accounts={accounts} hasExistingAccount={hasExistingAccount} />
+              <AccountStep
+                accounts={accounts}
+                hasExistingAccount={hasExistingAccount}
+                notice={statusNotice}
+                onRequestCreate={() => setIsAcceptingTerms(true)}
+              />
             )}
           </Panel>
         </div>
       </main>
       {isResolvingPage && <LoadingSplash />}
+      {isAcceptingTerms && (
+        <TermsAcceptanceDialog
+          onReject={handleRejectTerms}
+          onAccept={handleAcceptTerms}
+        />
+      )}
+      {isVerificationPending && <VerificationPendingDialog onBackHome={handleBackHome} />}
       {accounts.operationDialog && (
         <FlowStepDialog
           title={accounts.operationDialog.title}

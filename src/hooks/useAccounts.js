@@ -14,7 +14,7 @@ import {
 } from '@/lib/accountProfile';
 import { buildAccountSessionTypedData } from '@/lib/accountSession';
 import { PRIVATE_POKER_CONTRACT_ADDRESS, PPDC_CONTRACT_ADDRESS } from '@/lib/chain';
-import { formatChainError } from '@/lib/chain/errors';
+import { formatShortChainError } from '@/lib/chain/errors';
 import { SUBSCRIPTION_TIERS } from '@/lib/constants';
 import { getBufferedGasOverrides } from '@/lib/gas';
 import { publicPokerClient } from '@/lib/publicPokerClient';
@@ -362,7 +362,8 @@ export function useAccounts({ playerAddresses = [] } = {}) {
   }, []);
 
   const failOperation = useCallback((stepId, err, fallbackMessage) => {
-    const message = formatChainError(err, fallbackMessage);
+    console.error(fallbackMessage, err);
+    const message = formatShortChainError(err, fallbackMessage);
     setOperationDialog((current) => current
       ? {
         ...current,
@@ -513,7 +514,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
       continueAfterProfile();
     } catch (err) {
       console.error('Account profile sync failed:', err);
-      setError(formatChainError(err, 'Profile sync failed.'));
+      setError(formatShortChainError(err, 'Profile sync failed.'));
     } finally {
       setIsSavingProfile(false);
     }
@@ -540,7 +541,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
       continueAfterProfile();
     } catch (err) {
       console.error('Account profile save failed:', err);
-      setError(formatChainError(err, 'Profile save failed.'));
+      setError(formatShortChainError(err, 'Account creation failed.'));
     } finally {
       setIsSavingProfile(false);
     }
@@ -744,7 +745,7 @@ export function useAccounts({ playerAddresses = [] } = {}) {
     } catch (err) {
       console.error('Subscription failed:', err);
       failOperation(currentOperation ?? 'subscribe', err, 'Subscription failed.');
-      setError(formatChainError(err, 'Subscription failed.'));
+      setError(formatShortChainError(err, 'Subscription failed.'));
     } finally {
       setIsSubscribing(false);
       setSubscriptionStep('');
