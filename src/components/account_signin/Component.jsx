@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useDisconnect } from 'wagmi';
 import { Check, CircleAlert, Coins, KeyRound, Lock, Pencil, PenLine, ShieldX, Wallet, Zap } from 'lucide-react';
 import { useAccountSession } from '@/contexts/AccountSessionContext.jsx';
 import { ACCOUNT_STATUS, useAccounts } from '@/hooks/useAccounts';
@@ -352,7 +351,6 @@ export default function AccountSignin() {
   const memberAccess = useMemberAccess();
   const { hasPpdc, isChecking: isCheckingPpdc } = usePpdcBalance();
   const { clearSession } = useAccountSession();
-  const { disconnect } = useDisconnect();
   const navigate = useNavigate();
   const [isAcceptingTerms, setIsAcceptingTerms] = useState(false);
   const hasExistingAccount = memberAccess.accountStatus !== ACCOUNT_STATUS.NONE;
@@ -388,7 +386,6 @@ export default function AccountSignin() {
 
   const handleBackHome = () => {
     clearSession();
-    disconnect();
     window.location.replace('/');
   };
 

@@ -258,6 +258,12 @@ export default function GetStartedPage() {
 
   const accountKnown = !onboarding.isConnected || !onboarding.isCheckingAccount;
   const hasPpdc = onboarding.balances.pddc != null && onboarding.balances.pddc > 0n;
+  const hasArbitrumEth = onboarding.balances.arbitrum != null && onboarding.balances.arbitrum > 0n;
+  // The faucet needs gas: show it only once we know the wallet holds test ETH or
+  // an account exists. Hidden by default while either read is still pending.
+  const showPpdcFaucet = hasArbitrumEth || plan.hasAccount;
+  const hasJoinCards = onboarding.isConnected
+    && (!accountKnown || showPpdcFaucet || plan.hasAccount || hasPpdc);
 
   return (
     <>
@@ -295,14 +301,16 @@ export default function GetStartedPage() {
                 <ActionLink href="#setup" external={false} icon={<ArrowRight size={14} aria-hidden />}>
                   Start setup
                 </ActionLink>
-                <ActionLink
-                  href={FAUCET_URL}
-                  variant="secondary"
-                  internal
-                  icon={<ArrowRight size={14} aria-hidden />}
-                >
-                  PPDC faucet
-                </ActionLink>
+                {showPpdcFaucet && (
+                  <ActionLink
+                    href={FAUCET_URL}
+                    variant="secondary"
+                    internal
+                    icon={<ArrowRight size={14} aria-hidden />}
+                  >
+                    PPDC faucet
+                  </ActionLink>
+                )}
               </div>
 
               <ul className="mt-8 flex flex-wrap gap-x-6 gap-y-2 font-mono text-[10px] uppercase tracking-[0.28em] text-slate-500">
@@ -452,109 +460,115 @@ export default function GetStartedPage() {
         </section>
 
         <section className="mt-10 overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 px-6 py-10 md:px-10">
-          <div className="max-w-2xl">
-            <Eyebrow>Join testing</Eyebrow>
-            <h2 className="mt-3 text-2xl font-black tracking-tighter text-white md:text-3xl">
-              Three moves and you are in
-            </h2>
-            <p className="mt-3 text-sm leading-6 text-slate-400">
-              Claim test chips, create an unverified account, then ask us to
-              verify it.
-            </p>
-          </div>
+          {hasJoinCards && (
+            <>
+              <div className="max-w-2xl">
+                <Eyebrow>Join testing</Eyebrow>
+                <h2 className="mt-3 text-2xl font-black tracking-tighter text-white md:text-3xl">
+                  Three moves and you are in
+                </h2>
+                <p className="mt-3 text-sm leading-6 text-slate-400">
+                  Claim test chips, create an unverified account, then ask us to
+                  verify it.
+                </p>
+              </div>
 
-          {onboarding.isConnected && (
-            <ol className="mt-8 grid gap-4 md:grid-cols-2">
-              <JoinCard
-                icon={<Coins size={16} strokeWidth={2} aria-hidden />}
-                title="Claim PPDC"
-                done={hasPpdc}
-                copy={plan.ppdcReady
-                  ? 'Your wallet already holds more than 1,000 PPDC, which is plenty for a table.'
-                  : 'Get the test token from our faucet.'}
-              >
-                {plan.ppdcReady ? (
-                  <span className="mt-4 inline-flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-emerald-300">
-                    <Check size={12} strokeWidth={3} aria-hidden />
-                    Ready to play
-                  </span>
-                ) : faucet.allowance === 0n ? (
-                  <>
-                    <JoinCardAction disabled>
-                      PPDC faucet
-                      <ArrowRight size={12} aria-hidden />
-                    </JoinCardAction>
-                    <p className="mt-2 font-mono text-[10px] uppercase leading-5 tracking-[0.18em] text-ember-300">
-                      Faucet allowance reached. Refills {faucet.nextRefill}.
-                    </p>
-                  </>
-                ) : (
-                  <RouterLink to={FAUCET_URL}>
-                    <JoinCardAction>
-                      PPDC faucet
-                      <ArrowRight size={12} aria-hidden />
-                    </JoinCardAction>
-                  </RouterLink>
-              )}
-            </JoinCard>
+              {onboarding.isConnected && (
+                <ol className="mt-8 grid gap-4 md:grid-cols-2">
+                  {showPpdcFaucet && (
+                    <JoinCard
+                      icon={<Coins size={16} strokeWidth={2} aria-hidden />}
+                      title="Claim PPDC"
+                      done={hasPpdc}
+                      copy={plan.ppdcReady
+                        ? 'Your wallet already holds more than 1,000 PPDC, which is plenty for a table.'
+                        : 'Get the test token from our faucet.'}
+                    >
+                      {plan.ppdcReady ? (
+                        <span className="mt-4 inline-flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-emerald-300">
+                          <Check size={12} strokeWidth={3} aria-hidden />
+                          Ready to play
+                        </span>
+                      ) : faucet.allowance === 0n ? (
+                        <>
+                          <JoinCardAction disabled>
+                            PPDC faucet
+                            <ArrowRight size={12} aria-hidden />
+                          </JoinCardAction>
+                          <p className="mt-2 font-mono text-[10px] uppercase leading-5 tracking-[0.18em] text-ember-300">
+                            Faucet allowance reached. Refills {faucet.nextRefill}.
+                          </p>
+                        </>
+                      ) : (
+                        <RouterLink to={FAUCET_URL}>
+                          <JoinCardAction>
+                            PPDC faucet
+                            <ArrowRight size={12} aria-hidden />
+                          </JoinCardAction>
+                        </RouterLink>
+                      )}
+                    </JoinCard>
+                  )}
 
-            {!accountKnown && (
-              <JoinCard
-                icon={<LoaderCircle size={16} strokeWidth={2} aria-hidden className="animate-spin" />}
-                title="Checking your account"
-                copy="Reading your account status from Arbitrum Sepolia."
-              />
+                {!accountKnown && (
+                  <JoinCard
+                    icon={<LoaderCircle size={16} strokeWidth={2} aria-hidden className="animate-spin" />}
+                    title="Checking your account"
+                    copy="Reading your account status from Arbitrum Sepolia."
+                  />
+                )}
+
+                {accountKnown && !plan.hasAccount && hasPpdc && (
+                  <JoinCard
+                    icon={<UserPlus size={16} strokeWidth={2} aria-hidden />}
+                    title="Sign up"
+                    copy="Create your account with your wallet. It starts unverified."
+                  >
+                    <RouterLink to="/signin">
+                      <JoinCardAction>
+                        Sign up
+                        <ArrowRight size={12} aria-hidden />
+                      </JoinCardAction>
+                    </RouterLink>
+                  </JoinCard>
+                )}
+
+                {accountKnown && plan.hasAccount && !plan.isVerified && (
+                  <JoinCard
+                    icon={<BadgeCheck size={16} strokeWidth={2} aria-hidden />}
+                    title="Get verified"
+                    copy="Email us your wallet address and we enable your table access."
+                  >
+                    <button type="button" onClick={() => setDialogMode('verify')}>
+                      <JoinCardAction>
+                        Verify by email
+                        <Mail size={12} aria-hidden />
+                      </JoinCardAction>
+                    </button>
+                  </JoinCard>
+                )}
+
+                {accountKnown && plan.isVerified && (
+                  <JoinCard
+                    icon={<Spade size={16} strokeWidth={2} aria-hidden />}
+                    title={onboarding.isSignedIn ? 'Join a game' : 'Sign in'}
+                    done
+                    copy={onboarding.isSignedIn
+                      ? 'Your account is verified. Pick a lobby and take a seat.'
+                      : 'Your account is verified. Sign in with your wallet to take a seat.'}
+                  >
+                    <RouterLink to={onboarding.isSignedIn ? '/main-lobby' : '/signin'}>
+                      <JoinCardAction>
+                        {onboarding.isSignedIn ? 'Find a table' : 'Sign in'}
+                        <ArrowRight size={12} aria-hidden />
+                      </JoinCardAction>
+                    </RouterLink>
+                  </JoinCard>
+                )}
+                </ol>
+                )}
+            </>
             )}
-
-            {accountKnown && !plan.hasAccount && hasPpdc && (
-              <JoinCard
-                icon={<UserPlus size={16} strokeWidth={2} aria-hidden />}
-                title="Sign up"
-                copy="Create your account with your wallet. It starts unverified."
-              >
-                <RouterLink to="/signin">
-                  <JoinCardAction>
-                    Sign up
-                    <ArrowRight size={12} aria-hidden />
-                  </JoinCardAction>
-                </RouterLink>
-              </JoinCard>
-            )}
-
-            {accountKnown && plan.hasAccount && !plan.isVerified && (
-              <JoinCard
-                icon={<BadgeCheck size={16} strokeWidth={2} aria-hidden />}
-                title="Get verified"
-                copy="Email us your wallet address and we enable your table access."
-              >
-                <button type="button" onClick={() => setDialogMode('verify')}>
-                  <JoinCardAction>
-                    Verify by email
-                    <Mail size={12} aria-hidden />
-                  </JoinCardAction>
-                </button>
-              </JoinCard>
-            )}
-
-            {accountKnown && plan.isVerified && (
-              <JoinCard
-                icon={<Spade size={16} strokeWidth={2} aria-hidden />}
-                title={onboarding.isSignedIn ? 'Join a game' : 'Sign in'}
-                done
-                copy={onboarding.isSignedIn
-                  ? 'Your account is verified. Pick a lobby and take a seat.'
-                  : 'Your account is verified. Sign in with your wallet to take a seat.'}
-              >
-                <RouterLink to={onboarding.isSignedIn ? '/main-lobby' : '/signin'}>
-                  <JoinCardAction>
-                    {onboarding.isSignedIn ? 'Find a table' : 'Sign in'}
-                    <ArrowRight size={12} aria-hidden />
-                  </JoinCardAction>
-                </RouterLink>
-              </JoinCard>
-            )}
-          </ol>
-          )}
 
           <div className="mt-8 flex gap-3 border-t border-white/10 pt-6">
             <TriangleAlert size={16} aria-hidden className="mt-0.5 shrink-0 text-ember-300" />
