@@ -22,7 +22,6 @@ import { useOnboardingPlan } from '@/hooks/useOnboardingPlan';
 import { StepState } from '@/lib/onboarding';
 
 const FAUCET_URL = '/faucet';
-const DEVNET_URL = 'https://private-poker-devnet.wasmer.app';
 const BRIDGE_URL = 'https://portal.arbitrum.io/bridge?amount=0&sourceChain=sepolia&destinationChain=arbitrum-sepolia&tab=bridge&sanitized=true';
 
 const WALLETS = [
@@ -461,27 +460,28 @@ export default function GetStartedPage() {
             </p>
           </div>
 
-          <ol className="mt-8 grid gap-4 md:grid-cols-2">
-            <JoinCard
-              icon={<Coins size={16} strokeWidth={2} aria-hidden />}
-              title="Claim PPDC"
-              done={plan.ppdcReady}
-              copy={plan.ppdcReady
-                ? 'Your wallet already holds more than 1,000 PPDC, which is plenty for a table.'
-                : 'Get the test token from our faucet.'}
-            >
-              {plan.ppdcReady ? (
-                <span className="mt-4 inline-flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-emerald-300">
-                  <Check size={12} strokeWidth={3} aria-hidden />
-                  Ready to play
-                </span>
-              ) : (
-                <RouterLink to={FAUCET_URL}>
-                  <JoinCardAction>
-                    PPDC faucet
-                    <ArrowRight size={12} aria-hidden />
-                  </JoinCardAction>
-                </RouterLink>
+          {onboarding.isConnected && (
+            <ol className="mt-8 grid gap-4 md:grid-cols-2">
+              <JoinCard
+                icon={<Coins size={16} strokeWidth={2} aria-hidden />}
+                title="Claim PPDC"
+                done={plan.ppdcReady}
+                copy={plan.ppdcReady
+                  ? 'Your wallet already holds more than 1,000 PPDC, which is plenty for a table.'
+                  : 'Get the test token from our faucet.'}
+              >
+                {plan.ppdcReady ? (
+                  <span className="mt-4 inline-flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-emerald-300">
+                    <Check size={12} strokeWidth={3} aria-hidden />
+                    Ready to play
+                  </span>
+                ) : (
+                  <RouterLink to={FAUCET_URL}>
+                    <JoinCardAction>
+                      PPDC faucet
+                      <ArrowRight size={12} aria-hidden />
+                    </JoinCardAction>
+                  </RouterLink>
               )}
             </JoinCard>
 
@@ -497,14 +497,14 @@ export default function GetStartedPage() {
               <JoinCard
                 icon={<UserPlus size={16} strokeWidth={2} aria-hidden />}
                 title="Create an account"
-                copy="Connect your wallet on the devnet build. It starts unverified."
+                copy="Sign up with your wallet. Your account starts unverified."
               >
-                <a href={DEVNET_URL} target="_blank" rel="noreferrer">
+                <RouterLink to="/signin">
                   <JoinCardAction>
-                    Open devnet
-                    <ArrowUpRight size={12} aria-hidden />
+                    Sign up
+                    <ArrowRight size={12} aria-hidden />
                   </JoinCardAction>
-                </a>
+                </RouterLink>
               </JoinCard>
             )}
 
@@ -541,6 +541,7 @@ export default function GetStartedPage() {
               </JoinCard>
             )}
           </ol>
+          )}
 
           <div className="mt-8 flex gap-3 border-t border-white/10 pt-6">
             <TriangleAlert size={16} aria-hidden className="mt-0.5 shrink-0 text-ember-300" />

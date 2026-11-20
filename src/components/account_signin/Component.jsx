@@ -2,6 +2,7 @@
 
 import { Check, CircleAlert, Coins, KeyRound, Lock, Pencil, PenLine, ShieldAlert, ShieldX, Wallet, Zap } from 'lucide-react';
 import { ACCOUNT_STATUS, useAccounts } from '@/hooks/useAccounts';
+import { useMemberAccess } from '@/hooks/useMemberAccess';
 import FlowStepDialog from '@/components/table_screen/dialogs/FlowStepDialog';
 import Panel from '@/components/ui/Panel';
 
@@ -147,10 +148,15 @@ function TierOption(props) {
 
 function SigninStep(props) {
   const accounts = props.accounts;
+  const isNewAccount = !props.hasExistingAccount;
+  const title = isNewAccount ? 'Sign up' : 'Sign in';
+  const description = isNewAccount
+    ? 'Your wallet signs a message to create your account.'
+    : 'Your wallet signs a message to open a private session.';
 
   return (
     <div>
-      <StepHeader step="signin" title="Sign in" description="Your wallet signs a message to open a private session.">
+      <StepHeader step="signin" title={title} description={description}>
         {accounts.accountSession?.walletAddress && (
           <span className={CHIP}>
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
@@ -191,7 +197,7 @@ function SigninStep(props) {
 
       <button type="button" onClick={accounts.handleSignin} disabled={accounts.isSigningIn} className={PRIMARY_BUTTON}>
         {accounts.isWalletConnected ? <PenLine size={16} aria-hidden="true" /> : <Wallet size={16} aria-hidden="true" />}
-        {!accounts.isWalletConnected ? 'Connect wallet' : accounts.isSigningIn ? 'Waiting for signature...' : 'Sign in'}
+        {!accounts.isWalletConnected ? 'Connect wallet' : accounts.isSigningIn ? 'Waiting for signature...' : title}
       </button>
     </div>
   );
@@ -324,7 +330,7 @@ function SubscriptionStep(props) {
 }
 
 function AccountStep(props) {
-  if (props.accounts.step === 'signin') return <SigninStep accounts={props.accounts} />;
+  if (props.accounts.step === 'signin') return <SigninStep accounts={props.accounts} hasExistingAccount={props.hasExistingAccount} />;
   if (props.accounts.step === 'status') return <StatusStep status={props.accounts.accountStatus} />;
   if (props.accounts.step === 'profile') return <ProfileStep accounts={props.accounts} />;
   return <SubscriptionStep accounts={props.accounts} />;
@@ -332,6 +338,8 @@ function AccountStep(props) {
 
 export default function AccountSignin() {
   const accounts = useAccounts();
+  const memberAccess = useMemberAccess();
+  const hasExistingAccount = memberAccess.accountStatus !== ACCOUNT_STATUS.NONE;
   const operationDialogOkLabel = accounts.operationDialog?.error && !accounts.operationDialog?.isComplete
     ? 'Close'
     : 'Continue';
@@ -381,7 +389,7 @@ export default function AccountSignin() {
                 Checking your account...
               </div>
             ) : (
-              <AccountStep accounts={accounts} />
+              <AccountStep accounts={accounts} hasExistingAccount={hasExistingAccount} />
             )}
           </Panel>
         </div>
