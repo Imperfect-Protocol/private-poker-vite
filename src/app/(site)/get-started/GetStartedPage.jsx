@@ -19,6 +19,7 @@ import { Link as RouterLink } from 'react-router-dom';
 import ContactVerifyDialog from '@/components/contact/ContactVerifyDialog';
 import { useCopyFeedback } from '@/hooks/useCopyFeedback';
 import { useOnboardingPlan } from '@/hooks/useOnboardingPlan';
+import { usePpdcFaucet } from '@/hooks/usePpdcFaucet';
 import { StepState } from '@/lib/onboarding';
 
 const FAUCET_URL = '/faucet';
@@ -235,9 +236,9 @@ function JoinCard({ icon, title, copy, done = false, children }) {
   );
 }
 
-function JoinCardAction({ children }) {
+function JoinCardAction({ children, disabled = false }) {
   return (
-    <span className="mt-4 inline-flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-teal-300 transition-colors hover:text-teal-100">
+    <span className={`mt-4 inline-flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] transition-colors ${disabled ? 'text-slate-600' : 'text-teal-300 hover:text-teal-100'}`}>
       {children}
     </span>
   );
@@ -247,6 +248,7 @@ export default function GetStartedPage() {
   const [dialogMode, setDialogMode] = useState(null);
   const [stepOverrides, setStepOverrides] = useState({});
   const onboarding = useOnboardingPlan();
+  const faucet = usePpdcFaucet();
   const plan = onboarding.plan;
 
   const isExpanded = (id) => stepOverrides[id] ?? (plan.steps[id] === StepState.CURRENT);
@@ -255,6 +257,7 @@ export default function GetStartedPage() {
   };
 
   const accountKnown = !onboarding.isConnected || !onboarding.isCheckingAccount;
+  const hasPpdc = onboarding.balances.pddc != null && onboarding.balances.pddc > 0n;
 
   return (
     <>
@@ -465,7 +468,7 @@ export default function GetStartedPage() {
               <JoinCard
                 icon={<Coins size={16} strokeWidth={2} aria-hidden />}
                 title="Claim PPDC"
-                done={plan.ppdcReady}
+                done={hasPpdc}
                 copy={plan.ppdcReady
                   ? 'Your wallet already holds more than 1,000 PPDC, which is plenty for a table.'
                   : 'Get the test token from our faucet.'}
@@ -475,6 +478,16 @@ export default function GetStartedPage() {
                     <Check size={12} strokeWidth={3} aria-hidden />
                     Ready to play
                   </span>
+                ) : faucet.allowance === 0n ? (
+                  <>
+                    <JoinCardAction disabled>
+                      PPDC faucet
+                      <ArrowRight size={12} aria-hidden />
+                    </JoinCardAction>
+                    <p className="mt-2 font-mono text-[10px] uppercase leading-5 tracking-[0.18em] text-ember-300">
+                      Faucet allowance reached. Refills {faucet.nextRefill}.
+                    </p>
+                  </>
                 ) : (
                   <RouterLink to={FAUCET_URL}>
                     <JoinCardAction>
@@ -493,11 +506,11 @@ export default function GetStartedPage() {
               />
             )}
 
-            {accountKnown && !plan.hasAccount && (
+            {accountKnown && !plan.hasAccount && hasPpdc && (
               <JoinCard
                 icon={<UserPlus size={16} strokeWidth={2} aria-hidden />}
-                title="Create an account"
-                copy="Sign up with your wallet. Your account starts unverified."
+                title="Sign up"
+                copy="Create your account with your wallet. It starts unverified."
               >
                 <RouterLink to="/signin">
                   <JoinCardAction>

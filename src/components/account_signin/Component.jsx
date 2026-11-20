@@ -1,9 +1,13 @@
 "use client";
 
+import { useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Check, CircleAlert, Coins, KeyRound, Lock, Pencil, PenLine, ShieldAlert, ShieldX, Wallet, Zap } from 'lucide-react';
 import { ACCOUNT_STATUS, useAccounts } from '@/hooks/useAccounts';
 import { useMemberAccess } from '@/hooks/useMemberAccess';
+import { usePpdcBalance } from '@/hooks/usePpdcBalance';
 import FlowStepDialog from '@/components/table_screen/dialogs/FlowStepDialog';
+import LoadingSplash from '@/components/splash/LoadingSplash';
 import Panel from '@/components/ui/Panel';
 
 const STEPS = [
@@ -339,10 +343,26 @@ function AccountStep(props) {
 export default function AccountSignin() {
   const accounts = useAccounts();
   const memberAccess = useMemberAccess();
+  const { hasPpdc, isChecking: isCheckingPpdc } = usePpdcBalance();
+  const navigate = useNavigate();
   const hasExistingAccount = memberAccess.accountStatus !== ACCOUNT_STATUS.NONE;
+  const needsSetup = memberAccess.isWalletConnected
+    && !memberAccess.hasCurrentWalletKeypair
+    && !memberAccess.isChecking
+    && !hasExistingAccount
+    && !isCheckingPpdc
+    && !hasPpdc;
+  const isResolvingPage = memberAccess.isAccessPending
+    || memberAccess.isChecking
+    || isCheckingPpdc
+    || needsSetup;
   const operationDialogOkLabel = accounts.operationDialog?.error && !accounts.operationDialog?.isComplete
     ? 'Close'
     : 'Continue';
+
+  useEffect(() => {
+    if (needsSetup) navigate('/get-started', { replace: true });
+  }, [needsSetup, navigate]);
 
   return (
     <>
@@ -383,7 +403,7 @@ export default function AccountSignin() {
           </section>
 
           <Panel label="Account setup">
-            {accounts.isCheckingAccount ? (
+            {accounts.isCheckingAccount || needsSetup ? (
               <div className="flex h-full min-h-64 items-center justify-center gap-3 text-sm text-slate-400">
                 <span className="h-2 w-2 animate-pulse rounded-full bg-teal-500" />
                 Checking your account...
@@ -394,6 +414,7 @@ export default function AccountSignin() {
           </Panel>
         </div>
       </main>
+      {isResolvingPage && <LoadingSplash />}
       {accounts.operationDialog && (
         <FlowStepDialog
           title={accounts.operationDialog.title}
