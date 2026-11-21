@@ -126,7 +126,7 @@ export default function TableScreen({
   const payoutStyle = payoutPositionStyle(tableData, currentPlayerAddress, gameState?.payout?.winner);
 
   return (
-    <main className="min-h-screen bg-slate-950 p-4 md:px-4 md:py-4 text-white relative flex flex-col">
+    <main className="min-h-screen bg-page p-4 md:px-4 md:py-4 text-white relative flex flex-col">
       <Title
         tableName={tableData.name}
         rightText={showNextHandCountdown ? (
@@ -144,7 +144,7 @@ export default function TableScreen({
                 {resultTitleText}
               </div>
               {resultRankText && (
-                <div className={`mt-2 text-center text-sm md:text-base font-black uppercase tracking-[0.25em] drop-shadow-[0_0_18px_rgba(20,184,166,0.35)] ${isCheatResult ? resultColorClass : 'text-white'}`}>
+                <div className={`mt-2 text-center text-sm md:text-base font-black uppercase tracking-[0.25em] drop-shadow-[0_0_18px_rgba(225,29,72,0.35)] ${isCheatResult ? resultColorClass : 'text-white'}`}>
                   {resultRankText}
                 </div>
               )}
@@ -154,8 +154,8 @@ export default function TableScreen({
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
             <div className="grid grid-cols-[10rem_22rem] items-center gap-4">
               <div className="text-center group pointer-events-auto">
-                <div className="bg-[#080d16]/95 border-2 border-[#435064]/85 px-8 py-3 rounded-2xl backdrop-blur-xl shadow-[0_10px_24px_rgba(0,0,0,0.3),inset_0_0_18px_rgba(96,116,145,0.14)]">
-                  <p className="text-[10px] text-[#94a3b8] font-mono tracking-widest uppercase mb-1">Current Pot</p>
+                <div className="bg-slate-950/95 border-2 border-slate-200/35 px-8 py-3 rounded-2xl backdrop-blur-xl shadow-[0_10px_24px_rgba(0,0,0,0.3),inset_0_0_18px_rgba(255,75,104,0.12)]">
+                  <p className="text-[10px] text-slate-400 font-mono tracking-widest uppercase mb-1">Current Pot</p>
                   <div className="flex items-center justify-center gap-2 text-white">
                     <Coins size={28} className="text-yellow-200 drop-shadow-[0_0_10px_rgba(250,204,21,0.35)]" />
                     <p className="text-3xl font-black font-mono tracking-tighter italic">

@@ -76,7 +76,7 @@ export default function BuyInDialog({ tableData, lobbyId, onClose, onJoinRequest
             type="button"
             onClick={handleJoin}
             disabled={isPending}
-            className="flex-[2] py-3 rounded-lg bg-teal-500 text-slate-950 font-black hover:bg-teal-400 transition-colors uppercase text-xs tracking-widest shadow-[0_0_20px_rgba(20,184,166,0.3)] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex justify-center items-center"
+            className="flex-[2] py-3 rounded-lg bg-ember-500 text-slate-950 font-black hover:bg-ember-400 transition-colors uppercase text-xs tracking-widest shadow-[0_0_20px_rgba(255,165,0,0.3)] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex justify-center items-center"
           >
             Buy-in to join the table
           </button>

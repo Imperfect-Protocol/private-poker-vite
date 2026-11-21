@@ -11,7 +11,7 @@ const LEADERS = [
 
 export default function LeaderboardPage() {
   return (
-    <main className="min-h-full bg-slate-950 p-4 md:px-24 md:py-8 flex flex-col items-center justify-start">
+    <main className="min-h-full p-4 md:px-24 md:py-8 flex flex-col items-center justify-start">
       <div className="w-full max-w-5xl">
         <div className="flex flex-col md:flex-row justify-between items-end mb-8 px-2">
           <h1 className="text-4xl font-black text-white tracking-tighter uppercase">
@@ -26,7 +26,7 @@ export default function LeaderboardPage() {
         {/* --- TOP 3 HIGHLIGHTS --- */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
           {LEADERS.slice(0, 3).map((player) => (
-            <div key={player.rank} className="p-1 rounded-2xl bg-gradient-to-br from-teal-500/40 to-cyan-600/40 shadow-[0_0_20px_rgba(20,184,166,0.1)]">
+            <div key={player.rank} className="p-1 rounded-2xl bg-gradient-to-br from-teal-500/40 to-cyan-600/40 shadow-[0_0_20px_rgba(225,29,72,0.1)]">
               <div className="bg-slate-950 p-6 rounded-[14px] h-full relative overflow-hidden">
                 <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
                   <Trophy size={100} className="text-teal-400" />
@@ -53,7 +53,7 @@ export default function LeaderboardPage() {
         </div>
 
         {/* --- FULL RANKING REGISTRY --- */}
-        <section className="p-1 bg-gradient-to-br from-teal-500/80 to-cyan-600/80 rounded-2xl shadow-[0_0_30px_rgba(20,184,166,0.15)]">
+        <section className="p-1 bg-gradient-to-br from-teal-500/80 to-cyan-600/80 rounded-2xl shadow-[0_0_30px_rgba(225,29,72,0.15)]">
           <div className="p-6 bg-slate-950/95 backdrop-blur-md rounded-[14px] overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-left border-separate border-spacing-y-3 min-w-[700px]">
@@ -83,7 +83,7 @@ export default function LeaderboardPage() {
                       </td>
                       <td className="px-6 py-4 bg-slate-900/60 backdrop-blur-sm border-y border-r border-teal-500/20 rounded-r-xl text-right group-hover:border-teal-400 transition-colors">
                         <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase border tracking-wider ${player.status === 'active'
-                          ? 'border-teal-500 text-teal-400 bg-teal-500/10 shadow-[0_0_8px_rgba(20,184,166,0.3)]'
+                          ? 'border-teal-500 text-teal-400 bg-teal-500/10 shadow-[0_0_8px_rgba(225,29,72,0.3)]'
                           : 'border-slate-700 text-slate-600'
                           }`}>
                           {player.status}

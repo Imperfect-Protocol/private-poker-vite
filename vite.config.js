@@ -1,6 +1,6 @@
 /* global process */
 
-import { defineConfig } from 'vite'
+import { defineConfig, searchForWorkspaceRoot } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { standalone } from 'vite-plugin-standalone'
@@ -10,6 +10,7 @@ import { devProxyForSelectedConfig } from './src/lib/proxy/dev.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+const privatePokerP2PPath = path.resolve(__dirname, '../privatepoker-p2p')
 
 const envValue = (...names) => {
   const value = names
@@ -33,6 +34,12 @@ export default defineConfig({
   ],
   server: {
     port: 3000,
+    fs: {
+      allow: [
+        searchForWorkspaceRoot(__dirname),
+        privatePokerP2PPath,
+      ],
+    },
     ...(Object.keys(devProxy).length > 0 ? { proxy: devProxy } : {}),
   },
   resolve: {

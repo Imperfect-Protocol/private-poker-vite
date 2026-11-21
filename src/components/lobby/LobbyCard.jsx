@@ -51,7 +51,7 @@ export default function LobbyCard({ lobby }) {
 
           {/* Action Button */}
           <div className={`text-center py-3 rounded-lg font-bold text-xs uppercase tracking-widest transition-all ${isActive
-            ? 'bg-slate-900 text-teal-500 border border-teal-500/50 group-hover:bg-teal-400 group-hover:text-slate-950 group-hover:border-teal-400'
+            ? 'bg-slate-900 text-ember-500 border border-ember-500/50 group-hover:bg-ember-400 group-hover:text-slate-950 group-hover:border-ember-400'
             : 'bg-slate-900 text-slate-600 border border-slate-800'
             }`}>
             {isActive ? 'Enter' : 'Unavailable'}

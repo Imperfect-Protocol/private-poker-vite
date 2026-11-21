@@ -49,15 +49,15 @@ flowchart LR
 
 ## Procedure
 
-1. The player clicks `Return` from `Your Active Protocols`, or opens the table from a peer waiting dialog.
+1. The player clicks `Return` from `Your Tables`, or opens the table from a peer waiting dialog.
 2. The table route loads table detail and player seating status.
 3. If the player is seated and P2P is not connected, the rejoin dialog opens.
 4. The app prepares the network session and verifies that the generated announce key matches the on-chain key.
 5. The app enables the network.
 6. The player subscribes to the previous occupied seat in the ring.
-7. The app waits for inbound and outbound channels.
-8. If no inbound subscriber appears after the search window, the dialog exposes `Poke`.
-9. When inbound and outbound are ready, the dialog closes and the table is usable.
+7. The app waits for the Lobby route, then for the inbound and outbound channels.
+8. If the Lobby route fails, the Network step exposes `Poke`. If the inbound subscription fails, or the search window that starts once Network is green expires, the Events step exposes `Poke`. Poke forces a fresh announce through the Lobby.
+9. When the Lobby route, inbound subscription, and outbound channel are ready, the dialog closes and the table is usable.
 10. If a reconnect happened after gameplay started, history synchronization can send a sync message to bring peers back to the current hand tip.
 
 ```mermaid
@@ -73,7 +73,7 @@ flowchart TD
     I -- "No" --> J["Show authorization error"]
     I -- "Yes" --> K["Enable network"]
     K --> L["Subscribe to previous ring seat"]
-    L --> M{"Inbound and outbound ready?"}
+    L --> M{"Lobby, inbound, and outbound ready?"}
     M -- "No" --> N["Wait or Poke"]
     N --> M
     M -- "Yes" --> F
@@ -88,8 +88,12 @@ flowchart TD
 ## Waiting And Error States
 
 - The table route renders an empty loading body while contract data loads.
-- The rejoin dialog shows separate Security, Peer Connection, and Subscription states.
-- The Peer Connection step can show Searching, Connecting, connected, or a Poke action.
+- The rejoin dialog shows separate Security, Network, Events, and Actions states.
+- Network succeeds when the Table tab reaches its parent Lobby and a background route is ready. Events succeeds when the inbound subscription connects. Actions succeeds when the outbound channel connects.
+- Events and Actions stay in the waiting state until Network is green, so the Lobby is always reported first. The Events search window only starts once Network is green.
+- Network exposes `Poke` when the Lobby route fails. Events exposes `Poke` when the inbound subscription fails. Poke aborts the current attempt, re-announces through the Lobby, and disappears immediately.
+- The `Peer Notified` dialog closes back to the rejoin dialog; it does not close the tab.
+- Indicators are a grey bullet for waiting, a blinking yellow bullet for pending, a green bullet for success, and `❌` for failure.
 - A table key mismatch is a hard authorization error and instructs the player to rejoin so chain state matches deterministic keys.
 - If media data channels are required, `MediaDataChannelDialog` explains the browser requirement.
 

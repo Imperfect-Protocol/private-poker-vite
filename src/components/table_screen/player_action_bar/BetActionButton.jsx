@@ -21,7 +21,7 @@ export default function BetActionButton({
     ? 'border-red-500/50 text-red-500 hover:bg-red-500/10'
     : kind === 'call'
       ? 'border-amber-300/60 text-amber-200 hover:bg-amber-400/10'
-    : 'border-sky-400/50 text-sky-300 hover:bg-sky-400/10';
+    : 'border-slate-300/50 text-slate-200 hover:bg-slate-300/10';
 
   return (
     <button

@@ -166,7 +166,7 @@ export default function CreateTableDialog({
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
             className={`w-full bg-slate-950 border text-sm font-bold px-4 py-3 rounded-lg focus:outline-none transition-all ${isNameTaken
               ? 'border-red-500 text-red-400 focus:border-red-500 focus:shadow-[0_0_15px_rgba(239,68,68,0.2)]'
-              : 'border-slate-700 text-teal-400 focus:border-teal-400 focus:shadow-[0_0_15px_rgba(20,184,166,0.2)]'
+              : 'border-slate-700 text-teal-400 focus:border-teal-400 focus:shadow-[0_0_15px_rgba(225,29,72,0.2)]'
             }`}
             required
             disabled={isPending || isFetchingLobby}
@@ -220,7 +220,7 @@ export default function CreateTableDialog({
                 });
               }
             }}
-            className="w-full bg-slate-950 border border-slate-700 text-teal-400 text-sm font-bold px-4 py-3 rounded-lg focus:outline-none focus:border-teal-400 transition-all appearance-none cursor-pointer font-mono focus:shadow-[0_0_15px_rgba(20,184,166,0.2)]"
+            className="w-full bg-slate-950 border border-slate-700 text-teal-400 text-sm font-bold px-4 py-3 rounded-lg focus:outline-none focus:border-teal-400 transition-all appearance-none cursor-pointer font-mono focus:shadow-[0_0_15px_rgba(225,29,72,0.2)]"
             disabled={isPending || isFetchingLobby}
           >
             {STAKES_OPTIONS.map((opt) => (
@@ -244,7 +244,7 @@ export default function CreateTableDialog({
           <button
             type="submit"
             disabled={isPending || isFetchingLobby || isNameTaken || formData.name.trim() === "" || lobbyInfo.name === "Lobby Not Found"}
-            className="flex-[2] py-3 rounded-lg bg-teal-500 text-slate-950 font-black hover:bg-teal-400 transition-colors uppercase text-xs tracking-widest shadow-[0_0_20px_rgba(20,184,166,0.3)] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex justify-center items-center"
+            className="flex-[2] py-3 rounded-lg bg-ember-500 text-slate-950 font-black hover:bg-ember-400 transition-colors uppercase text-xs tracking-widest shadow-[0_0_20px_rgba(255,165,0,0.3)] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex justify-center items-center"
           >
             {isFetchingLobby ? (
               <span className="animate-pulse">Verifying Data...</span>

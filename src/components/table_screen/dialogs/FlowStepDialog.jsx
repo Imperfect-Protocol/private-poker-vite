@@ -13,8 +13,11 @@ const STATUS_STYLES = {
   connected: 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.8)]',
   complete: 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.8)]',
   error: 'bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.8)]',
+  rejected: 'bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.8)]',
   'not connected': 'bg-yellow-300 shadow-[0_0_14px_rgba(250,204,21,0.75)]',
   'peer subscribed': 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.8)]',
+  'peer found, waiting': 'bg-blue-500 animate-pulse shadow-[0_0_16px_rgba(59,130,246,0.95)]',
+  'peer waiting': 'bg-blue-500 animate-pulse shadow-[0_0_16px_rgba(59,130,246,0.95)]',
   'no subscribers': 'bg-slate-600 shadow-[0_0_10px_rgba(148,163,184,0.28)]',
   poke: 'bg-yellow-300 shadow-[0_0_14px_rgba(250,204,21,0.75)]',
   optional: 'bg-slate-500',
@@ -28,20 +31,49 @@ const STATUS_TEXT_STYLES = {
   verifying: 'text-yellow-300',
   active: 'text-yellow-300',
   'not connected': 'text-yellow-300',
+  'peer found, waiting': 'text-blue-400',
+  'peer waiting': 'text-blue-400',
   listening: 'text-sky-300',
   error: 'text-red-300',
+  rejected: 'text-red-300',
   'no subscribers': 'text-slate-400',
 };
 
-function StepRow({ label, status = 'pending', statusTone, action, children }) {
+const TONE_DOT_STYLES = {
+  waiting: 'bg-slate-700',
+  pending: 'bg-yellow-400 animate-pulse shadow-[0_0_12px_rgba(250,204,21,0.8)]',
+  success: 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.8)]',
+};
+
+const TONE_INDICATORS = {
+  waiting: <span className={`w-3 h-3 rounded-full ${TONE_DOT_STYLES.waiting}`} />,
+  pending: <span className={`w-3 h-3 rounded-full ${TONE_DOT_STYLES.pending}`} />,
+  success: <span className={`w-3 h-3 rounded-full ${TONE_DOT_STYLES.success}`} />,
+  failed: <span className="text-[11px] leading-none">❌</span>,
+};
+
+const TONE_TEXT_STYLES = {
+  waiting: 'text-slate-500',
+  pending: 'text-yellow-300',
+  success: 'text-emerald-300',
+  failed: 'text-red-300',
+};
+
+function StepRow({ label, status = 'pending', statusTone, tone, action, children }) {
   const styleStatus = statusTone ?? status;
-  const statusTextClass = STATUS_TEXT_STYLES[styleStatus] ?? 'text-slate-500';
+  const statusTextClass = tone
+    ? TONE_TEXT_STYLES[tone]
+    : STATUS_TEXT_STYLES[styleStatus] ?? 'text-slate-500';
 
   return (
     <div className="flex flex-col gap-3 bg-slate-950 border border-slate-800 rounded-lg p-4">
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <span className={`w-3 h-3 rounded-full ${STATUS_STYLES[styleStatus] ?? STATUS_STYLES.pending}`} />
+          <span className="flex w-6 items-center justify-center">
+            {tone
+              ? TONE_INDICATORS[tone]
+              : <span className={`w-3 h-3 rounded-full ${STATUS_STYLES[styleStatus] ?? STATUS_STYLES.pending}`} />}
+          </span>
           <span className="text-slate-200 font-mono text-xs uppercase tracking-widest">
             {label}
           </span>
@@ -70,8 +102,9 @@ export default function FlowStepDialog({
   okLabel = 'OK',
   canOkOnError = false,
   showOk = true,
+  canOkOverride = undefined,
 }) {
-  const canOk = isComplete || (canOkOnError && Boolean(error));
+  const canOk = canOkOverride ?? (isComplete || (canOkOnError && Boolean(error)));
 
   return (
     <TableDialogOverlay>
@@ -91,7 +124,7 @@ export default function FlowStepDialog({
 
         <div className="flex flex-col gap-3">
           {steps.map((step) => (
-            <StepRow key={step.id} label={step.label} status={step.status} statusTone={step.statusTone} action={step.action}>
+            <StepRow key={step.id} label={step.label} status={step.status} statusTone={step.statusTone} tone={step.tone} action={step.action}>
               {step.body}
             </StepRow>
           ))}

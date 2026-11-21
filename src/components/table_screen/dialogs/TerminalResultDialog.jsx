@@ -50,9 +50,9 @@ export default function TerminalResultDialog({ result, onCloseTab }) {
           type="button"
           onClick={onCloseTab}
           disabled={waitingForCirculation}
-          className={`w-full py-3 rounded-lg font-black transition-colors uppercase text-xs tracking-widest shadow-[0_0_20px_rgba(20,184,166,0.3)] ${waitingForCirculation
+          className={`w-full py-3 rounded-lg font-black transition-colors uppercase text-xs tracking-widest shadow-[0_0_20px_rgba(255,165,0,0.3)] ${waitingForCirculation
             ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
-            : 'bg-teal-500 text-slate-950 hover:bg-teal-400 cursor-pointer'}`}
+            : 'bg-ember-500 text-slate-950 hover:bg-ember-400 cursor-pointer'}`}
         >
           {tableComplete ? 'Close' : 'OK'}
         </button>

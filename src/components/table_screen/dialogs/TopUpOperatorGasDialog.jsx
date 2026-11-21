@@ -78,7 +78,7 @@ export default function TopUpOperatorGasDialog({
         <button
           type="button"
           onClick={() => onConfirm?.(topUpAmount)}
-          className="mt-2 py-3 rounded-lg font-black transition-colors uppercase text-xs tracking-widest bg-teal-400 text-slate-950 hover:bg-teal-300 cursor-pointer shadow-[0_0_20px_rgba(45,212,191,0.3)]"
+          className="mt-2 py-3 rounded-lg font-black transition-colors uppercase text-xs tracking-widest bg-ember-500 text-slate-950 hover:bg-ember-400 cursor-pointer shadow-[0_0_20px_rgba(255,165,0,0.3)]"
         >
           Top Up
         </button>

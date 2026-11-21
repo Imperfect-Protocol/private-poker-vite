@@ -1,14 +1,22 @@
 import { BrowserRouter, Navigate, Routes, Route, Outlet, useParams, useSearchParams } from 'react-router-dom';
 import AccountSignin from '@/components/account_signin/Component';
+import AgeGate from '@/components/age_gate/AgeGate';
+import { LobbyP2PProvider } from '@/contexts/LobbyP2PProvider.jsx';
 import SiteLayout from '@/components/layout/SiteLayout';
 import AboutPage from '@/app/(site)/about/AboutPage';
+import FaucetPage from '@/app/(site)/faucet/FaucetPage';
+import GetStartedPage from '@/app/(site)/get-started/GetStartedPage';
 import CreateTablePage from '@/app/tables/create/CreateTablePage';
 import LeaderboardPage from '@/app/(site)/leaderboard/LeaderboardPage';
 import LobbyClient from '@/components/lobby/LobbyClient';
 import MainLobbyPage from '@/app/(site)/main-lobby/MainLobbyPage';
 import MembersOnlyGate from '@/components/members_only/MembersOnlyGate';
-import SplashPage from '@/app/SplashPage';
+import OurVisionPage from '@/app/(site)/our-vision/OurVisionPage';
+import PeersPage from '@/app/(site)/peers/PeersPage';
+import PrivacyPage from '@/app/(site)/privacy/PrivacyPage';
 import TableClient from '@/components/table/TableClient';
+import TermsPage from '@/app/(site)/terms/TermsPage';
+import WhoAreWePage from '@/app/(site)/who-are-we/WhoAreWePage';
 
 function LobbyRoute() {
   const { id } = useParams();
@@ -22,6 +30,8 @@ function TableRoute() {
     <TableClient
       tableId={id ?? '1'}
       lobbyId={searchParams.get('lobbyId') ?? '1'}
+      peerId={searchParams.get('peerId')}
+      initialIsSeated={searchParams.get('seated') === '1' ? true : null}
     />
   );
 }
@@ -45,19 +55,30 @@ function MembersOnlyRoute({ children }) {
 export default function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<SplashPage />} />
-        <Route element={<SiteRouteLayout />}>
-          <Route path="/signin" element={<AccountSignin />} />
-          <Route path="/main-lobby" element={<MembersOnlyRoute><MainLobbyPage /></MembersOnlyRoute>} />
-          <Route path="/about" element={<AboutPage />} />
-          <Route path="/leaderboard" element={<LeaderboardPage />} />
-          <Route path="/lobby/:id" element={<MembersOnlyRoute><LobbyRoute /></MembersOnlyRoute>} />
-        </Route>
-        <Route path="/tables/:id" element={<MembersOnlyRoute><TableRoute /></MembersOnlyRoute>} />
-        <Route path="/tables/create" element={<MembersOnlyRoute><CreateTablePage /></MembersOnlyRoute>} />
-        <Route path="*" element={<Navigate to="/signin" replace />} />
-      </Routes>
+      <AgeGate>
+        <LobbyP2PProvider>
+          <Routes>
+            <Route element={<SiteRouteLayout />}>
+              <Route index element={<AboutPage />} />
+              <Route path="/signin" element={<AccountSignin />} />
+              <Route path="/main-lobby" element={<MembersOnlyRoute><MainLobbyPage /></MembersOnlyRoute>} />
+            <Route path="/peers" element={<MembersOnlyRoute><PeersPage /></MembersOnlyRoute>} />
+              <Route path="/get-started" element={<GetStartedPage />} />
+              <Route path="/faucet" element={<FaucetPage />} />
+              <Route path="/our-vision" element={<OurVisionPage />} />
+              <Route path="/who-are-we" element={<WhoAreWePage />} />
+              <Route path="/terms" element={<TermsPage />} />
+              <Route path="/privacy" element={<PrivacyPage />} />
+              <Route path="/about" element={<Navigate to="/" replace />} />
+              <Route path="/leaderboard" element={<LeaderboardPage />} />
+              <Route path="/lobby/:id" element={<MembersOnlyRoute><LobbyRoute /></MembersOnlyRoute>} />
+            </Route>
+            <Route path="/tables/:id" element={<MembersOnlyRoute><TableRoute /></MembersOnlyRoute>} />
+            <Route path="/tables/create" element={<MembersOnlyRoute><CreateTablePage /></MembersOnlyRoute>} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </LobbyP2PProvider>
+      </AgeGate>
     </BrowserRouter>
   );
 }

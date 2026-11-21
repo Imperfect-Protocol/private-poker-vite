@@ -7,6 +7,7 @@ import ActiveTableView from '@/components/table/ActiveTableView';
 import BuyInDialog from '@/components/table_screen/dialogs/BuyInDialog';
 import JoinTableFlowDialog from '@/components/table_screen/dialogs/JoinTableFlowDialog';
 import ReJoinTableFlowDialog from '@/components/table_screen/dialogs/ReJoinTableFlowDialog';
+import PeerWaitStatusDialog from '@/components/table_screen/dialogs/PeerWaitStatusDialog';
 import MediaDataChannelDialog from '@/components/table_screen/dialogs/MediaDataChannelDialog';
 import TerminalResultDialog from '@/components/table_screen/dialogs/TerminalResultDialog';
 import TopUpOperatorGasDialog from '@/components/table_screen/dialogs/TopUpOperatorGasDialog';
@@ -14,21 +15,7 @@ import { useAccounts } from '@/hooks/useAccounts';
 import { useWebcam } from '@/hooks/useWebcam';
 import { submitConsoleLine } from '@/lib/crum_pkr';
 import { emitLobbyTablesChanged } from '@/lib/lobbyEvents';
-
-const readCreatedTableSnapshot = (tableId) => {
-  if (typeof window === 'undefined') return null;
-
-  try {
-    const key = `private-poker:new-table:${tableId}`;
-    const rawSnapshot = window.sessionStorage.getItem(key);
-    if (!rawSnapshot) return null;
-
-    window.sessionStorage.removeItem(key);
-    return JSON.parse(rawSnapshot);
-  } catch {
-    return null;
-  }
-};
+import { VirtualNetworkActivityBus } from 'privatepoker-p2p';
 
 const formatSeatAddress = (address) => (address ? address.slice(2, 4).toUpperCase() : 'Peer');
 const ensureHexPrefix = (value) => {
@@ -83,12 +70,86 @@ const POKER_PROTOCOL_UI_STATES = new Set([
   'River',
 ]);
 
-export default function TableClient({ tableId, lobbyId, initialTableData = null, initialIsSeated = null }) {
-  const [initialSnapshot] = useState(() => readCreatedTableSnapshot(tableId));
+class DebugMessageList {
+  static key(message) {
+    return [
+      message.sender ?? '',
+      message.text ?? '',
+      message.level ?? '',
+    ].join(':');
+  }
 
-  const bootTableData = initialTableData ?? initialSnapshot?.tableData ?? null;
-  const bootIsSeated = initialIsSeated ?? initialSnapshot?.isSeated ?? null;
+  static append(messages, message) {
+    const key = DebugMessageList.key(message);
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage && DebugMessageList.key(lastMessage) === key) return messages;
+    return [...messages, message].slice(-160);
+  }
 
+  static merge(leftMessages, rightMessages) {
+    const seen = new Set();
+    const merged = [];
+    [...leftMessages, ...rightMessages].forEach((message) => {
+      const key = DebugMessageList.key(message);
+      if (seen.has(key)) return;
+      seen.add(key);
+      merged.push(message);
+    });
+    return merged.slice(-160);
+  }
+}
+
+class DebugConsoleLogger {
+  static log(message) {
+    console.debug('[PrivatePoker debug]', {
+      sender: message.sender,
+      text: message.text,
+      level: message.level ?? 'info',
+    });
+  }
+}
+
+class DebugActivityScope {
+  constructor(fields) {
+    this.lobbyId = String(fields.lobbyId ?? '');
+    this.tableId = String(fields.tableId ?? '');
+  }
+
+  accepts(activity) {
+    if (!activity?.text) return false;
+    if (activity.source === 'table') return false;
+    if (activity.lobbyId !== undefined && String(activity.lobbyId) !== this.lobbyId) return false;
+    if (activity.tableId === undefined) return true;
+    return String(activity.tableId) === this.tableId || String(activity.tableId) === '0';
+  }
+}
+
+class DebugActivitySubscriber {
+  constructor(fields) {
+    this.scope = new DebugActivityScope(fields);
+    this.onMessage = fields.onMessage;
+    this.bus = new VirtualNetworkActivityBus({ channelName: 'private-poker:debug' });
+  }
+
+  start() {
+    this.bus.listen((activity) => this.accept(activity));
+  }
+
+  stop() {
+    this.bus.close();
+  }
+
+  accept(activity) {
+    if (!this.scope.accepts(activity)) return;
+    this.onMessage?.({
+      text: activity.text,
+      sender: activity.sender ?? 'RTC',
+      level: activity.level ?? 'info',
+    });
+  }
+}
+
+export default function TableClient({ tableId, lobbyId, peerId, initialTableData = null, initialIsSeated = null }) {
   const tableRef = useRef(null);
   const pokerTableRef = useRef(null);
   const lastProtocolActionKeyRef = useRef(null);
@@ -101,14 +162,26 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
   const [showReJoinDialog, setShowReJoinDialog] = useState(false);
   const [forceHideReJoinDialog, setForceHideReJoinDialog] = useState(false);
   const [reJoinDismissed, setReJoinDismissed] = useState(false);
+  const [peerWaitDismissed, setPeerWaitDismissed] = useState(false);
   const [showDebugConsole, setShowDebugConsole] = useState(false);
   const [topUpRequest, setTopUpRequest] = useState(null);
   const [showMediaDataChannelDialog, setShowMediaDataChannelDialog] = useState(false);
   const webcam = useWebcam();
 
   const addDebugMessage = useCallback((message) => {
-    setMessages((prev) => [...prev, message].slice(-160));
+    DebugConsoleLogger.log(message);
+    setMessages((prev) => DebugMessageList.append(prev, message));
   }, []);
+
+  useEffect(() => {
+    const subscriber = new DebugActivitySubscriber({
+      lobbyId,
+      tableId,
+      onMessage: addDebugMessage,
+    });
+    subscriber.start();
+    return () => subscriber.stop();
+  }, [addDebugMessage, lobbyId, tableId]);
 
   const handleRtcActivity = useCallback((activity) => {
     if (activity.details?.kind === 'media-data-channel-required') {
@@ -128,19 +201,21 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
     const sender = formatSeatAddress(playerAddress);
     const messageLabels = rtcMessageLabels(incoming);
 
-    if (
+    const isPokerProtocolMessage = (
       incoming?.type === 'History'
       || incoming?.type === 'ChatMessage'
       || incoming?.type === 'StartHand'
       || incoming?.type === 'TableAggregatePublicKey'
       || incoming?.type === 'TableComplete'
       || incoming?.type === 'SettleHand'
-    ) {
+    );
+
+    messageLabels.forEach((text) => addDebugMessage({ text, sender }));
+
+    if (isPokerProtocolMessage) {
       pokerTableRef.current?.handleNetworkMessage(incoming, playerAddress);
       return;
     }
-
-    messageLabels.forEach((text) => addDebugMessage({ text, sender }));
   }, [addDebugMessage]);
 
   const handleSeatEvent = useCallback((seatNo, seatEvent) => {
@@ -168,8 +243,9 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
   const table = useTable({
     tableId,
     lobbyId,
-    initialTableData: bootTableData,
-    initialIsSeated: bootIsSeated,
+    peerId,
+    initialTableData,
+    initialIsSeated,
     onActivity: handleRtcActivity,
     onSeat: handleSeatEvent,
     networkEnabled,
@@ -206,9 +282,22 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
   const protocolActionState = pokerTableState.protocolActionState;
   const submitProtocolAction = pokerTableActions.submitProtocolAction;
   const debugMessages = useMemo(() => (
-    [...messages, ...pokerTableState.gameMessages].slice(-160)
+    DebugMessageList.merge(messages, pokerTableState.gameMessages)
   ), [messages, pokerTableState.gameMessages]);
-  const p2pEstablished = table.networkSnapshot?.status === 'connected';
+  const p2pEstablished = table.networkSnapshot?.status === 'connected'
+    && table.networkSnapshot?.outboundState === 'Connected';
+  const peerDecisionState = table.networkSnapshot?.inboundState;
+  const showPeerWaitStatusDialog = (
+    table.hasJoinedTable
+    && showReJoinDialog
+    && !forceHideReJoinDialog
+    && !joinRequest
+    && !p2pEstablished
+    && (
+      peerDecisionState === 'PeerRejected'
+      || (peerDecisionState === 'PeerWaiting' && !peerWaitDismissed)
+    )
+  );
   const consoleIdentity = useMemo(() => {
     const playerAddress = table.currentSeat?.playerAddress;
     const displayName = getPlayerDisplayname(playerAddress) || 'Console';
@@ -330,9 +419,14 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
     setShowReJoinDialog(true);
   }, [forceHideReJoinDialog, joinRequest, p2pEstablished, showReJoinDialog, table.hasJoinedTable]);
 
+  useEffect(() => {
+    if (peerDecisionState === 'PeerWaiting') return;
+    setPeerWaitDismissed(false);
+  }, [peerDecisionState]);
+
   if (table.isLoading || !table.tableData) {
     return (
-      <main className="min-h-screen bg-slate-950 flex items-center justify-center">
+      <main className="min-h-screen bg-page flex items-center justify-center">
         <div />
       </main>
     );
@@ -444,7 +538,15 @@ export default function TableClient({ tableId, lobbyId, initialTableData = null,
         />
       )}
 
-      {table.hasJoinedTable && showReJoinDialog && !forceHideReJoinDialog && !joinRequest && !p2pEstablished && (
+      {showPeerWaitStatusDialog && (
+        <PeerWaitStatusDialog
+          status={peerDecisionState}
+          peerAddress={table.networkSnapshot?.inboundPeerAddress}
+          onClose={peerDecisionState === 'PeerWaiting' ? () => setPeerWaitDismissed(true) : handleCloseTab}
+        />
+      )}
+
+      {table.hasJoinedTable && showReJoinDialog && !forceHideReJoinDialog && !joinRequest && !p2pEstablished && !showPeerWaitStatusDialog && (
         <ReJoinTableFlowDialog
           table={table}
           networkSnapshot={table.networkSnapshot}

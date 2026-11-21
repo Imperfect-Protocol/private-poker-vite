@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAccountSession } from '@/contexts/AccountSessionContext.jsx';
 import { useActionQueue } from '@/hooks/useActionQueue';
-import { usePrivatePokerSignal } from '@/hooks/usePrivatePokerSignal';
 import { useRequireBLS } from '@/hooks/useRequireBLS';
-import { useRtcSessionPool } from '@/hooks/useRtcSessionPool';
 import { PokerRtcSession } from '@/lib/PokerRtcSession';
 
 const normalizeAddress = (value) => value?.toLowerCase() ?? '';
@@ -20,6 +18,7 @@ function makePlayersKey(players = []) {
 
 function makeSessionConfigKey({
   playerAddress,
+  peerId,
   operator,
   tableId,
   lobbyId,
@@ -31,6 +30,7 @@ function makeSessionConfigKey({
 }) {
   return [
     normalizeAddress(playerAddress),
+    peerId ?? '',
     normalizeAddress(operator),
     tableId ?? '',
     lobbyId ?? '',
@@ -52,6 +52,7 @@ const makeBlsActionKey = ({ playerAddress, lobbyId, tableId }) => [
 export function useNetwork({
   tableId,
   lobbyId,
+  peerId = null,
   tableDetails,
   seats = [],
   onActivity,
@@ -61,8 +62,6 @@ export function useNetwork({
 } = {}) {
   const { accountSession } = useAccountSession();
   const playerAddress = accountSession?.walletAddress;
-  const { sendSignal } = usePrivatePokerSignal({ playerAddress });
-  const rtcSessionPool = useRtcSessionPool();
   const controlActions = useActionQueue('network-control');
   const { blsKeys, generateKeys, generateHandKeys } = useRequireBLS(tableDetails);
   const blsKeysRef = useRef(null);
@@ -101,18 +100,11 @@ export function useNetwork({
 
   const [session] = useState(
     () => new PokerRtcSession({
-      sendSignal: () => {},
       onActivity: () => {},
       onStateChange: () => {},
-      sessionPool: rtcSessionPool,
     }),
   );
   const [networkSnapshot, setNetworkSnapshot] = useState(() => session.getSnapshot());
-
-  const sendPooledSignal = useCallback(async (payload) => {
-    const route = await rtcSessionPool.requestLobbyRoute(payload);
-    return route;
-  }, [rtcSessionPool]);
 
   const prepareNetworkSessionNow = useCallback(async () => {
     const keys = blsKeysRef.current ?? blsKeys ?? await generateKeys(tableDetails);
@@ -128,6 +120,7 @@ export function useNetwork({
     }
     session.update({
       playerAddress,
+      peerId,
       operator: keys.operator,
       tableId,
       lobbyId,
@@ -148,6 +141,7 @@ export function useNetwork({
     localMediaStream,
     lobbyId,
     mySeatAnnouncePublicKey,
+    peerId,
     playerAddress,
     players,
     session,
@@ -163,6 +157,7 @@ export function useNetwork({
   useEffect(() => {
     const sessionConfigKey = makeSessionConfigKey({
       playerAddress,
+      peerId,
       operator,
       tableId,
       lobbyId,
@@ -178,8 +173,6 @@ export function useNetwork({
     }
 
     session.setCallbacks({
-      sendSignal,
-      sendPooledSignal,
       enqueueControlAction: controlActions.enqueueAction,
       blsActionKey,
       onActivity,
@@ -187,6 +180,7 @@ export function useNetwork({
     });
     session.update({
       playerAddress,
+      peerId,
       operator,
       tableId,
       lobbyId,
@@ -204,6 +198,7 @@ export function useNetwork({
     localMediaStream,
     lobbyId,
     onActivity,
+    peerId,
     playerAddress,
     players,
     playersKey,
@@ -213,8 +208,6 @@ export function useNetwork({
     operator,
     blsActionKey,
     controlActions,
-    sendPooledSignal,
-    sendSignal,
     session,
     tableCapacity,
     tableDetails?.currentHand,
