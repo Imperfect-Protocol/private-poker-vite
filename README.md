@@ -1,16 +1,45 @@
-# React + Vite
+# PRIVATE POKER by Imperfect Protocol ♠️
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Private Poker is frontend-only peer-to-peer game with results settlement on Arbitrum blockchain. 
 
-Currently, two official plugins are available:
+The app implements a solution to 1979 Mental Poker problem with modern BLS cryptography.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
 
-## React Compiler
+- Check our [Crumble](https://github.com/Imperfect-Protocol/crumble) project for reference implementation in Rust, and
+- our [P2P](https://github.com/Imperfect-Protocol/privatepoker-p2p) networking library.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Run locally
 
-## Expanding the ESLint configuration
+Run local dev:
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```bash
+npm install
+npm run dev
+```
+
+## Build and run the Wasmer package
+
+The production build includes a standalone JavaScript entry that runs on Wasmer, so the whole frontend can be served as a WebAssembly package.
+
+Build it:
+
+```bash
+npm run build-wasmer
+```
+
+Run the resulting package locally:
+
+```bash
+cd dist
+wasmer run --net .
+```
+
+## Configuration
+
+Environment variables are read at build time by Vite:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `NEXT_PUBLIC_PRIVATE_POKER_CHAIN` | `sepolia` | `sepolia` or `devnode`: RPC, contracts and gas settings. |
+| `NEXT_PUBLIC_PRIVATE_POKER_MESH` | `main` | `main` or `dev`: P2P bootstrapping. |
+
